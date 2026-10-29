@@ -1,0 +1,63 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Test core (Linux)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/tests/AutomationMonitor.Core.Smoke/AutomationMonitor.Core.Smoke.csproj", "--configuration", "Debug"],
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Build XrmToolBox plugin (cross-compile attempt)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj", "--configuration", "Debug"],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build core library",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/src/AutomationMonitor.Core/AutomationMonitor.Core.csproj", "--configuration", "Debug"],
+      "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "build",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "build",
+            "${workspaceFolder}/tests/AutomationMonitor.Core.Smoke/AutomationMonitor.Core.Smoke.csproj",
+            "/property:GenerateFullPaths=true",
+            "/consoleloggerparameters:NoSummary;ForceNoAlign"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "publish",
+            "${workspaceFolder}/tests/AutomationMonitor.Core.Smoke/AutomationMonitor.Core.Smoke.csproj",
+            "/property:GenerateFullPaths=true",
+            "/consoleloggerparameters:NoSummary;ForceNoAlign"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "watch",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "watch",
+            "run",
+            "--project",
+            "${workspaceFolder}/tests/AutomationMonitor.Core.Smoke/AutomationMonitor.Core.Smoke.csproj"
+        ],
+        "problemMatcher": "$msCompile"
+    }
+  ]
+}

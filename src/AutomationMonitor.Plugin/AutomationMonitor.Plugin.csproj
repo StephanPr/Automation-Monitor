@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>AutomationMonitor.Plugin</AssemblyName>
+    <RootNamespace>AutomationMonitor.Plugin</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AssemblyTitle>Automation Monitor</AssemblyTitle>
+    <Company>Automation Monitor</Company>
+    <Description>Local, read-only Power Automate and Logic Apps monitor for XrmToolBox.</Description>
+    <Version>0.1.0</Version>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Build-only .NET Framework reference assemblies; never ship them. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="XrmToolBoxPackage" Version="1.2025.10.74" />
+    <ProjectReference Include="../AutomationMonitor.Core/AutomationMonitor.Core.csproj" />
+    <!-- Explicit .NET Framework WinForms references allow non-designer source. -->
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.ComponentModel.Composition" />
+  </ItemGroup>
+</Project>

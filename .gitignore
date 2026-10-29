@@ -1,0 +1,21 @@
+.vs/
+.vscode/*.local.json
+**/bin/
+**/obj/
+*.user
+*.suo
+*.pdb
+*.cache
+*.log
+.env
+.env.*
+!*.example
+local/
+TestResults/
+
+# Local caches and generated artifacts
+staging/
+artifacts/
+.vs/
+*.user
+*.suo

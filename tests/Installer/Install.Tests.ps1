@@ -93,63 +93,139 @@ BeforeAll {
         return $match.Groups[1].Value
     }
 
-    function Read-CapturedStream {
-        param([string] $OutFile, [string] $ErrFile)
-        $text = ''
-        foreach ($file in @($OutFile, $ErrFile)) {
-            if (Test-Path -LiteralPath $file) {
-                $chunk = Get-Content -LiteralPath $file -Raw
-                if ($chunk) { $text = $text + $chunk + [System.Environment]::NewLine }
-            }
+    function Receive-CapturedStream {
+        <#
+            Collects one ReadToEndAsync() task started on a redirected child stream. The reads are
+            started before WaitForExit so a full pipe buffer can never defeat the timeout: .NET
+            Framework 4.8 has no ProcessStartInfo.RedirectStandardOutputToFile to fall back on.
+        #>
+        param($Task, [int] $TimeoutMs = 5000)
+
+        if ($null -eq $Task) { return '' }
+        if (-not $Task.Wait($TimeoutMs)) { return '<stream read timed out>' }
+        if ($Task.IsFaulted) { return '' }
+        return $Task.Result
+    }
+
+    function Stop-CmdTree {
+        <#
+            A batch entry point spawns a child - Install.cmd starts powershell.exe - and
+            Process.Kill() stops only cmd.exe, leaving that child holding the temp root the AfterAll
+            is about to delete. Terminating the tree is the difference between a failing test and a
+            runner that cannot clean up. It never throws: it runs on the timeout path, where the
+            reported problem has to stay the timeout and not become a teardown error.
+        #>
+        param([System.Diagnostics.Process] $Process)
+
+        try {
+            & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /F /T /PID $Process.Id 2>&1 | Out-Null
         }
-        return $text
+        catch {
+            try { $Process.Kill() } catch { }
+        }
+        try { $null = $Process.WaitForExit(5000) } catch { }
     }
 
     function Invoke-CmdEntry {
         <#
-            Runs Install.cmd the way an unattended caller would: through cmd.exe with the batch
-            path and every argument quoted. cmd removes the outermost quote pair of a /c payload
-            that begins with a quote and holds more than two quotes, so the whole payload needs a
-            pair of its own - without it the batch path is cut at its first space and cmd answers
-            "The filename, directory name, or volume label syntax is incorrect." without ever
-            starting the installer. /d keeps any machine AutoRun out of the way.
-            The exit code is only read once the process is confirmed to have exited, because the
-            timed WaitForExit overload alone does not refresh the exit information ExitCode reads.
+            Runs a .cmd entry point the way an unattended caller does: in its own cmd.exe, with a
+            finite timeout, both output streams captured and the child's real exit code. /d keeps any
+            machine AutoRun out of the way.
+
+            Command line. cmd keeps the quotes of a /c payload only when that payload holds exactly
+            two quote characters and no special characters between them, and '&' '|' '(' ')' count as
+            special - the temp roots in this suite deliberately contain parentheses, so cmd always
+            falls back to its heuristics: strip the leading quote, remove the last quote of the line.
+            /S replaces those heuristics with one documented rule - strip the first and last quote
+            around the string and leave everything else unchanged - so the payload is wrapped in
+            exactly ONE pair, and the batch path contributes a pair of its own:
+
+                /d /s /c ""D:\a b\Install.cmd" -StorageRoot "C:\c d (e)""
+
+            A second wrapper pair hands cmd the token ""D:\a b\Install.cmd" and it answers
+            "The filename, directory name, or volume label syntax is incorrect." without ever starting
+            the batch (AM-23). The quoting is built here, from an argument array, so no call site can
+            get the nesting wrong.
+
+            Process, not Start-Process. Start-Process -PassThru hands back an object for a child that
+            has frequently already exited, and Windows PowerShell 5.1 then surfaces no exit code at
+            all: CI reported "Expected 0 ... but got $null" while TimedOut was already false. Starting
+            the Process here keeps the handle alive until Dispose, so ExitCode is the child's own
+            code, and a code that still cannot be read is raised as a harness defect instead of being
+            returned as $null. Stdin is deliberately not redirected: Install.cmd's pause must stay
+            able to block, or "returns by itself when AM_NO_PAUSE is set" would prove nothing.
         #>
         param(
-            [string] $Arguments,
-            [string] $Log,
-            [string] $ErrorLog,
+            [string] $BatchPath,
+            [string[]] $Arguments = @(),
             [int] $TimeoutMs = 90000
         )
 
-        $commandLine = '/d /c ""' + $Arguments + '"'
+        if (-not (Test-Path -LiteralPath $BatchPath)) { throw "batch file not found: $BatchPath" }
+
+        $payload = '"' + $BatchPath + '"'
+        foreach ($argument in $Arguments) {
+            # A Windows path cannot contain a quote, so one in a value is a caller bug, not a cmd quirk.
+            if ($argument.Contains('"')) { throw "batch argument must not contain a quote: $argument" }
+            if ($argument.StartsWith('-')) {
+                $payload = $payload + ' ' + $argument
+            }
+            else {
+                $payload = $payload + ' "' + $argument + '"'
+            }
+        }
+        $commandLine = '/d /s /c "' + $payload + '"'
+
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
+        $startInfo.Arguments = $commandLine
+        # Redirection requires UseShellExecute=false; a window style alongside it is a conflict.
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+
         $proc = $null
         try {
-            # No -WindowStyle here: redirecting the streams forces UseShellExecute=false, and a
-            # window-style request alongside that is a parameter conflict, not a preference.
-            $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $commandLine -PassThru `
-                -RedirectStandardOutput $Log -RedirectStandardError $ErrorLog
+            $proc = [System.Diagnostics.Process]::Start($startInfo)
         }
         catch {
-            throw "Start-Process could not launch cmd.exe with: $commandLine`n$($_.Exception.Message)"
+            throw "cmd.exe could not be started with: $commandLine`n$($_.Exception.Message)"
         }
+
         try {
-            if (-not $proc.WaitForExit($TimeoutMs)) {
-                try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
-                try { $null = $proc.WaitForExit(5000) } catch { }
-                return [pscustomobject]@{
-                    TimedOut   = $true
-                    ExitCode   = $null
-                    Output     = (Read-CapturedStream -OutFile $Log -ErrFile $ErrorLog)
-                    CommandLine = $commandLine
+            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+            $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+            $timedOut = -not $proc.WaitForExit($TimeoutMs)
+            if ($timedOut) {
+                Stop-CmdTree -Process $proc
+            }
+            else {
+                # Flushes the asynchronous exit processing the timed overload does not perform; only
+                # after it are ExitCode and the drained streams guaranteed to be settled.
+                $proc.WaitForExit()
+            }
+
+            $stdout = Receive-CapturedStream -Task $stdoutTask
+            $stderr = Receive-CapturedStream -Task $stderrTask
+            $exitCode = $null
+            if (-not $timedOut) {
+                try {
+                    $exitCode = $proc.ExitCode
+                }
+                catch {
+                    throw ('the exit code of cmd.exe could not be read, which is a harness defect: ' +
+                        'cmd line: ' + $commandLine + ' | output: ' + $stdout + $stderr)
                 }
             }
-            $proc.WaitForExit()
+
             return [pscustomobject]@{
-                TimedOut   = $false
-                ExitCode   = $proc.ExitCode
-                Output     = (Read-CapturedStream -OutFile $Log -ErrFile $ErrorLog)
+                TimedOut    = $timedOut
+                ExitCode    = $exitCode
+                StdOut      = $stdout
+                StdErr      = $stderr
+                Output      = ($stdout + $stderr)
                 CommandLine = $commandLine
             }
         }
@@ -673,6 +749,62 @@ Describe 'Automation Monitor installer' {
         }
     }
 
+    Context 'Batch harness self-check' {
+        BeforeAll {
+            # This context separates 'cmd could not parse the command line' from 'the installer is
+            # broken'. The probe sits two directories deep under names carrying spaces and
+            # parentheses, prints the command line cmd.exe itself was started with (%CMDCMDLINE%),
+            # the path it ran as (%~f0) and the arguments it received (%*, %~2, %~4), writes to both
+            # streams, and exits with a code no installer would ever use.
+            $root = New-TempRoot -Name 'probe'
+            $dir = Join-Path $root 'probe dir (nested)'
+            [System.IO.Directory]::CreateDirectory($dir) | Out-Null
+            $probeCmd = Join-Path $dir 'probe.cmd'
+            $probeArg = Join-Path $dir 'first arg (paren)'
+            $probeMarker = Join-Path $root 'second arg'
+
+            # ASCII, never UTF8: Windows PowerShell 5.1 writes UTF8 with a BOM, and cmd.exe will not
+            # run a batch file that begins with one. Set-Content supplies the CRLF endings cmd wants.
+            # Every printed value keeps its parentheses balanced, so echoing it stays inert.
+            @(
+                '@echo off'
+                'echo CMDCMDLINE=%CMDCMDLINE%'
+                'echo BATCH=%~f0'
+                'echo ARGS=%*'
+                'echo ARG2=%~2'
+                'echo ARG4=%~4'
+                'echo probe-stdout-marker'
+                'echo probe-stderr-marker 1>&2'
+                'exit /b 43'
+            ) | Set-Content -LiteralPath $probeCmd -Encoding ASCII
+
+            $run = Invoke-CmdEntry -BatchPath $probeCmd -Arguments @('-StorageRoot', $probeArg, '-Marker', $probeMarker)
+            $because = 'temp: ' + $env:TEMP + ' | cmd line: ' + $run.CommandLine + ' | output: ' + $run.Output
+        }
+
+        AfterAll { Remove-TempRoot -Root $root }
+
+        It 'starts a spaced and parenthesised batch, captures both streams and returns its exit code' {
+            # The batch really ran. %~f0 is matched by suffix because it canonicalises the 8.3
+            # spelling $env:TEMP arrives with, exactly as AM-21 requires.
+            $run.TimedOut | Should -BeFalse -Because ('the probe must return by itself; ' + $because)
+            $run.Output | Should -Match 'BATCH=.*probe dir \(nested\)\\probe\.cmd' -Because $because
+            # cmd received the whole spaced and parenthesised path as one quoted token rather than
+            # cutting it at the first space: %CMDCMDLINE% is cmd reporting its own command line.
+            $run.Output | Should -Match ('CMDCMDLINE=.*"' + [regex]::Escape($probeCmd) + '"') -Because $because
+            # The quoting survived the trip: %* keeps the quotes, %~2 and %~4 hand back the values.
+            $run.Output | Should -Match ('ARGS=-StorageRoot "' + [regex]::Escape($probeArg) + '"') -Because $because
+            $run.Output | Should -Match ('ARG2=' + [regex]::Escape($probeArg) + '(\r|\n|$)') -Because $because
+            $run.Output | Should -Match ('ARG4=' + [regex]::Escape($probeMarker) + '(\r|\n|$)') -Because $because
+            # Two captures, not one merged blob.
+            $run.StdOut | Should -Match 'probe-stdout-marker' -Because $because
+            $run.StdOut | Should -Not -Match 'probe-stderr-marker' -Because $because
+            $run.StdErr | Should -Match 'probe-stderr-marker' -Because $because
+            # A fast-exiting child's code reaches the caller instead of arriving as $null.
+            $run.ExitCode | Should -Be 43 -Because ('a batch exit code must survive the harness; ' + $because)
+        }
+    }
+
     Context 'Install.cmd entry point (unattended)' {
         BeforeAll {
             $root = New-TempRoot -Name 'cmd'
@@ -684,12 +816,9 @@ Describe 'Automation Monitor installer' {
         AfterAll { Remove-TempRoot -Root $root }
 
         It 'finishes without waiting for a key when AM_NO_PAUSE is set' {
-            $log = Join-Path $root 'install.log'
-            $errLog = Join-Path $root 'install.err.log'
-            $arguments = '"' + $CmdPath + '" -StorageRoot "' + $storage + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
-                $run = Invoke-CmdEntry -Arguments $arguments -Log $log -ErrorLog $errLog
+                $run = Invoke-CmdEntry -BatchPath $CmdPath -Arguments @('-StorageRoot', $storage, '-PackageRoot', $package)
                 $because = 'temp: ' + $env:TEMP + ' | cmd line: ' + $run.CommandLine + ' | output: ' + $run.Output
                 $run.TimedOut | Should -BeFalse -Because ('Install.cmd must return by itself when AM_NO_PAUSE is set; ' + $because)
                 $run.ExitCode | Should -Be 0 -Because $because
@@ -702,13 +831,10 @@ Describe 'Automation Monitor installer' {
         }
 
         It 'propagates the failure exit code without blocking' {
-            $log = Join-Path $root 'failed.log'
-            $errLog = Join-Path $root 'failed.err.log'
             $missing = Join-Path $root 'not installed (yet)'
-            $arguments = '"' + $CmdPath + '" -StorageRoot "' + $missing + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
-                $run = Invoke-CmdEntry -Arguments $arguments -Log $log -ErrorLog $errLog
+                $run = Invoke-CmdEntry -BatchPath $CmdPath -Arguments @('-StorageRoot', $missing, '-PackageRoot', $package)
                 $because = 'temp: ' + $env:TEMP + ' | cmd line: ' + $run.CommandLine + ' | output: ' + $run.Output
                 $run.TimedOut | Should -BeFalse -Because ('Install.cmd must return the code, not wait for a key, on a failure path; ' + $because)
                 $run.ExitCode | Should -Not -Be 0 -Because $because

@@ -135,7 +135,7 @@ installer test means no release exists, not a release with a warning.
 | `net48` compile of the plugin | `0 Warning(s) 0 Error(s)` | Linux (cross-compile) and Windows CI |
 | Build output equals the distribution set | CI step that fails on any unexpected assembly | Windows CI |
 | Assembly name/version identity | `[AssemblyName]::GetAssemblyName` assertions | Windows CI only |
-| Installer behaviour | 35 Pester tests: fresh, upgrade, repeat, spaces+parens, custom and default storage, blocked file, missing/damaged/foreign package, rollback, uninstall, unattended `Install.cmd` | **Windows CI only - not yet executed** |
+| Installer behaviour | 36 Pester tests: fresh, upgrade, repeat, spaces+parens, custom and default storage, blocked file, missing/damaged/foreign package, rollback, uninstall, unattended `Install.cmd`, plus a batch-harness self-check that proves the `cmd /s` invocation, both stream captures and the child's exit code independently of the installer | **Windows CI only - not yet executed** |
 | Plugin loads in XrmToolBox; grid renders; live Dataverse reads; portal deep links | none | **no environment available** |
 
 ## Runtime sign-off checklist (still to be done by a person, on Windows)

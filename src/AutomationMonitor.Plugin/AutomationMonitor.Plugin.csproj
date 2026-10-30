@@ -12,6 +12,15 @@
     <Version>0.1.0</Version>
     <Nullable>enable</Nullable>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <!--
+      The plugin runs only inside XrmToolBox, which supplies every third-party assembly it needs:
+      Microsoft.Xrm.Sdk, XrmToolBox.Extensibility, the connection library, Newtonsoft.Json and the
+      rest of the host's closure. Copying those build-time assets next to the plugin would place a
+      second copy of host assemblies in the Plugins directory, which is the classic cause of
+      XrmToolBox load failures. Keeping them out also makes the output directory equal to the
+      distribution set, so packaging cannot accidentally ship the host (44 files before this).
+    -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
     <!-- Build-only .NET Framework reference assemblies; never ship them. -->

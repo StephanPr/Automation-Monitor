@@ -1,0 +1,25 @@
+# Keep the working tree byte-stable on every platform.
+#
+# Repository text is stored and checked out with LF. That is deliberate: shell
+# scripts must stay runnable and the packager (scripts/package_windows.py) is the
+# single place that converts the Windows script assets to CRLF inside the archive.
+# Letting git normalise line endings per checkout would move that decision out of
+# the build and make the shipped bytes depend on a developer's git config.
+
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.cmd text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+*.dll binary
+*.pdb binary
+*.exe binary
+*.zip binary
+*.png binary

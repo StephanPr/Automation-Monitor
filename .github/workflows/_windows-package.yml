@@ -1,0 +1,202 @@
+# Reusable Windows packaging and installer-test workflow.
+#
+# Called by build.yml for every build on main and by release.yml for a tagged
+# release, so the artifact a release ships is produced by exactly the same steps
+# that a normal CI run proves. Nothing here publishes a release.
+#
+# The job runs its PowerShell steps in Windows PowerShell 5.1 (shell: powershell)
+# on purpose: that is the engine the shipped Install.ps1 and Install.cmd target, so
+# the tests exercise the installer on the interpreter a customer will use. Pester is
+# installed only inside this runner, at a pinned version, and is never part of the
+# distribution package or a runtime dependency of the plugin.
+
+name: Windows package (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Package version, e.g. 0.1.0 or 0.1.0-alpha.1 (a leading v is accepted)"
+        required: true
+        type: string
+      configuration:
+        description: "Build configuration"
+        required: false
+        type: string
+        default: Release
+      pester-version:
+        description: "Pinned Pester version used for the installer tests"
+        required: false
+        type: string
+        default: 5.6.1
+    outputs:
+      package-name:
+        description: "File name of the distribution zip"
+        value: ${{ jobs.package.outputs.package-name }}
+      package-sha256:
+        description: "SHA-256 of the distribution zip"
+        value: ${{ jobs.package.outputs.package-sha256 }}
+
+permissions:
+  contents: read
+
+env:
+  PLUGIN_PROJECT: src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj
+  SHIPPED_ASSEMBLIES: AutomationMonitor.Core.dll,AutomationMonitor.Plugin.dll
+
+jobs:
+  package:
+    name: Build, package and install-test on Windows
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
+    outputs:
+      package-name: ${{ steps.pack.outputs.package-name }}
+      package-sha256: ${{ steps.pack.outputs.package-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve the version
+        id: ver
+        env:
+          AM_VERSION_REQUEST: ${{ inputs.version }}
+        run: |
+          $raw = $env:AM_VERSION_REQUEST.Trim()
+          if ($raw.StartsWith('v')) { $raw = $raw.Substring(1) }
+          if ($raw -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "version '$raw' is not of the form 0.1.0 or 0.1.0-label"
+          }
+          $numeric = ($raw -split '-')[0]
+          "full=$raw" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+          "numeric=$numeric" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+          Write-Host "Building version $raw (assembly version $numeric)"
+
+      - name: Build the plugin with the release identity
+        env:
+          AM_VERSION: ${{ steps.ver.outputs.full }}
+          AM_ASSEMBLY_VERSION: ${{ steps.ver.outputs.numeric }}
+          AM_CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          dotnet build $env:PLUGIN_PROJECT --configuration $env:AM_CONFIGURATION `
+            -p:Version=$env:AM_VERSION `
+            -p:AssemblyVersion=$env:AM_ASSEMBLY_VERSION `
+            -p:FileVersion="$env:AM_ASSEMBLY_VERSION.0"
+
+      - name: Assert the build output is the distribution set
+        env:
+          AM_CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          $output = Join-Path 'src/AutomationMonitor.Plugin/bin' (Join-Path $env:AM_CONFIGURATION 'net48')
+          $expected = $env:SHIPPED_ASSEMBLIES -split ','
+          $assemblies = @(Get-ChildItem -Path $output -Filter *.dll -File)
+          Write-Host ("build output files: " + ((Get-ChildItem -Path $output -Recurse -File | Measure-Object).Count))
+          $unexpected = @($assemblies | Where-Object { $expected -notcontains $_.Name })
+          if ($unexpected.Count -gt 0) {
+            throw ("build output contains assemblies that must not ship: " + (($unexpected | ForEach-Object { $_.Name }) -join ', '))
+          }
+          foreach ($name in $expected) {
+            if (-not (Test-Path -Path (Join-Path $output $name))) {
+              throw "expected assembly is missing from the build output: $name"
+            }
+          }
+
+
+      - name: Build the distribution package
+        id: pack
+        env:
+          AM_VERSION: ${{ steps.ver.outputs.full }}
+          AM_CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          $output = Join-Path 'src/AutomationMonitor.Plugin/bin' (Join-Path $env:AM_CONFIGURATION 'net48')
+          python scripts/package_windows.py --version $env:AM_VERSION --plugin-output-dir $output --output dist
+          if ($LASTEXITCODE -ne 0) { throw 'packaging failed' }
+          $zip = Join-Path 'dist' ("AutomationMonitor-v{0}-win.zip" -f $env:AM_VERSION)
+          python scripts/validate_windows_package.py $zip --version $env:AM_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'package validation failed' }
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $name = Split-Path -Leaf $zip
+          "package-name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+          "package-sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+          Write-Host "$hash  $name"
+
+      - name: Assert the shipped assembly identity and manifest
+        env:
+          AM_ASSEMBLY_VERSION: ${{ steps.ver.outputs.numeric }}
+          AM_VERSION: ${{ steps.ver.outputs.full }}
+        run: |
+          $zip = Join-Path 'dist' ("AutomationMonitor-v{0}-win.zip" -f $env:AM_VERSION)
+          $target = Join-Path $env:RUNNER_TEMP ("package-" + [guid]::NewGuid().ToString('N'))
+          Expand-Archive -Path $zip -DestinationPath $target
+          $payload = Join-Path $target 'plugin'
+          $expectedVersion = [version]("$env:AM_ASSEMBLY_VERSION.0")
+          foreach ($name in ($env:SHIPPED_ASSEMBLIES -split ',')) {
+            $assembly = [System.Reflection.AssemblyName]::GetAssemblyName((Join-Path $payload $name))
+            Write-Host ("identity: " + $assembly.FullName)
+            if ($assembly.Name -ne ($name -replace '\.dll$', '')) {
+              throw "assembly name for $name is '$($assembly.Name)'"
+            }
+            if ($assembly.Version -ne $expectedVersion) {
+              throw "assembly version for $name is $($assembly.Version), expected $expectedVersion"
+            }
+          }
+          $manifest = Get-Content -Path (Join-Path $payload 'plugin.manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.assemblyVersion -ne $env:AM_ASSEMBLY_VERSION) {
+            throw "manifest advertises assembly version $($manifest.assemblyVersion)"
+          }
+          foreach ($entry in @($manifest.files)) {
+            $path = Join-Path $payload $entry.name
+            $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne $entry.sha256) { throw "manifest checksum does not match $($entry.name)" }
+            if ((Get-Item -Path $path).Length -ne $entry.size) { throw "manifest size does not match $($entry.name)" }
+          }
+
+      - name: Install the pinned Pester
+        env:
+          AM_PESTER_VERSION: ${{ inputs.pester-version }}
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          Install-Module -Name Pester -RequiredVersion $env:AM_PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion $env:AM_PESTER_VERSION -Force
+          $loaded = (Get-Module Pester).Version
+          if ("$loaded" -ne $env:AM_PESTER_VERSION) { throw "Pester $loaded was loaded, expected $env:AM_PESTER_VERSION" }
+          Write-Host "Pester $loaded (test-time only; not part of any package)"
+
+      - name: Run the installer test suite
+        env:
+          AM_PESTER_VERSION: ${{ inputs.pester-version }}
+        run: |
+          Import-Module Pester -RequiredVersion $env:AM_PESTER_VERSION -Force
+          $configuration = New-PesterConfiguration
+          $configuration.Run.Path = 'tests/Installer/Install.Tests.ps1'
+          $configuration.Run.PassThru = $true
+          $configuration.Output.Verbosity = 'Detailed'
+          $result = Invoke-Pester -Configuration $configuration
+          Write-Host ("installer tests: passed={0} failed={1} skipped={2} total={3}" -f `
+            $result.PassedCount, $result.FailedCount, $result.SkippedCount, $result.TotalCount)
+          if ($result.FailedCount -gt 0) { throw "$($result.FailedCount) installer tests failed" }
+          if ($result.TotalCount -lt 30) {
+            throw "only $($result.TotalCount) installer tests ran; the suite did not execute as expected"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: automation-monitor-windows-package
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload debug symbols separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-monitor-symbols
+          path: src/AutomationMonitor.Plugin/bin/${{ inputs.configuration }}/net48/*.pdb
+          if-no-files-found: warn

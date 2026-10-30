@@ -16,6 +16,9 @@ TestResults/
 # Local caches and generated artifacts
 staging/
 artifacts/
+dist/
+__pycache__/
+*.pyc
 .vs/
 *.user
 *.suo

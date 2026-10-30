@@ -2,43 +2,85 @@ name: Build and smoke test
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
+# Building and testing needs nothing but read access to the repository. The only
+# workflow that writes (GitHub Releases) is release.yml, and it asks for that
+# permission on the single job that publishes.
+permissions:
+  contents: read
+
+env:
+  CORE_PROJECT: src/AutomationMonitor.Core/AutomationMonitor.Core.csproj
+  PLUGIN_PROJECT: src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj
+
 jobs:
+  version:
+    name: Resolve the CI package version
+    runs-on: ubuntu-24.04
+    outputs:
+      numeric: ${{ steps.read.outputs.numeric }}
+      package: ${{ steps.compose.outputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Read the version from the plugin project
+        id: read
+        run: |
+          numeric=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' \
+            src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj | head -1)
+          if ! printf '%s' "$numeric" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "no <Version>x.y.z</Version> found in the plugin project (got '$numeric')" >&2
+            exit 1
+          fi
+          echo "numeric=$numeric" | tee -a "$GITHUB_OUTPUT"
+      - name: Compose the CI version
+        id: compose
+        run: echo "package=${{ steps.read.outputs.numeric }}-ci.${{ github.run_number }}" | tee -a "$GITHUB_OUTPUT"
+
   linux-core:
+    name: Core tests, smoke test and packaging on Linux
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Run core unit tests
         run: dotnet test tests/AutomationMonitor.Core.Tests/AutomationMonitor.Core.Tests.csproj --configuration Release
       - name: Run core smoke test
         run: dotnet run --project tests/AutomationMonitor.Core.Smoke/AutomationMonitor.Core.Smoke.csproj --configuration Release
-
-  windows-plugin:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - name: Restore plugin
-        run: dotnet restore src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj
-      - name: Build Windows XrmToolBox plugin
-        run: dotnet build src/AutomationMonitor.Plugin/AutomationMonitor.Plugin.csproj --configuration Release --no-restore
-      - name: Prepare plugin artifacts
-        shell: pwsh
+      - name: Run packaging tests
+        run: python -m unittest discover -s tests/packaging -v
+      - name: Build the plugin (net48 cross-compile, layout only)
+        run: >
+          dotnet build ${{ env.PLUGIN_PROJECT }} --configuration Release
+          -p:Version=${{ needs.version.outputs.package }}
+          -p:AssemblyVersion=${{ needs.version.outputs.numeric }}
+          -p:FileVersion=${{ needs.version.outputs.numeric }}.0
+      - name: Build and validate a package from the Linux build
         run: |
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-          Copy-Item src/AutomationMonitor.Plugin/bin/Release/net48/AutomationMonitor.Plugin.dll staging/
-          Copy-Item src/AutomationMonitor.Plugin/bin/Release/net48/AutomationMonitor.Core.dll staging/
-          if (Test-Path src/AutomationMonitor.Plugin/bin/Release/net48/AutomationMonitor.Plugin.pdb) {
-            Copy-Item src/AutomationMonitor.Plugin/bin/Release/net48/AutomationMonitor.Plugin.pdb staging/
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: automation-monitor-plugin
-          path: staging/
+          python scripts/package_windows.py --version "${{ needs.version.outputs.package }}" --output dist
+          python scripts/validate_windows_package.py "dist/AutomationMonitor-v${{ needs.version.outputs.package }}-win.zip" --version "${{ needs.version.outputs.package }}"
+      - name: Show the packaged layout
+        run: unzip -l "dist/AutomationMonitor-v${{ needs.version.outputs.package }}-win.zip"
+
+  windows-package:
+    name: Windows package and installer tests
+    needs: version
+    uses: ./.github/workflows/_windows-package.yml
+    with:
+      version: ${{ needs.version.outputs.package }}
+      configuration: Release
+    permissions:
+      contents: read
+

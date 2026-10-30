@@ -1,0 +1,157 @@
+# Publish a prerelease of the Windows distribution package.
+#
+# Gating, in order, and why each one is here:
+#   1. the tag must be a valid version whose numeric core equals the plugin project's
+#      <Version>, so a release can never carry binaries built from a different number;
+#   2. while runtime testing in a real XrmToolBox has not happened, the tag must carry a
+#      prerelease label (see RELEASE_REQUIRE_PRERELEASE_LABEL below);
+#   3. the Windows job builds the package and runs the installer test suite;
+#   4. only a job that needs (2) and (3) may write, and it re-verifies the checksum of
+#      the artifact it downloaded before creating the release.
+# Nothing here publishes to the XrmToolBox Tool Library, NuGet, or any code-signing
+# service, and no secret other than the built-in GITHUB_TOKEN is used.
+
+name: Publish Windows release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, e.g. v0.1.0-alpha.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # Flip to 'false' only after a person has loaded the plugin in a real XrmToolBox and
+  # the checklist in docs/distribution.md has been signed off. Until then every release
+  # this workflow produces is a prerelease.
+  RELEASE_REQUIRE_PRERELEASE_LABEL: 'true'
+
+jobs:
+  prepare:
+    name: Validate the tag against the source version
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.gate.outputs.version }}
+      numeric: ${{ steps.gate.outputs.numeric }}
+      prerelease: ${{ steps.gate.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag
+        id: resolve
+        env:
+          AM_INPUT_TAG: ${{ inputs.tag }}
+          AM_EVENT: ${{ github.event_name }}
+          AM_REF: ${{ github.ref_name }}
+        run: |
+          if [ "$AM_EVENT" = "push" ]; then
+            echo "tag=$AM_REF" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "tag=$AM_INPUT_TAG" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate the tag against the source version
+        id: gate
+        env:
+          AM_TAG: ${{ steps.resolve.outputs.tag }}
+          AM_REQUIRE_PRERELEASE: ${{ env.RELEASE_REQUIRE_PRERELEASE_LABEL }}
+        run: |
+          # pipefail: without it a rejected tag would be masked by tee's exit code.
+          set -o pipefail
+          python3 scripts/check_release_version.py \
+            --tag "$AM_TAG" \
+            --require-prerelease "$AM_REQUIRE_PRERELEASE" | tee -a "$GITHUB_OUTPUT"
+
+  package:
+    name: Build, package and install-test on Windows
+    needs: prepare
+    uses: ./.github/workflows/_windows-package.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      configuration: Release
+    permissions:
+      contents: read
+
+  publish:
+    name: Create the GitHub prerelease
+    needs: [prepare, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      # The only write grant in either workflow, on the only job that publishes, and it
+      # runs only after the Windows build, package validation and installer tests passed.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: automation-monitor-windows-package
+          path: dist
+
+      - name: Re-verify the artifact against the Windows job
+        env:
+          AM_EXPECTED_SHA: ${{ needs.package.outputs.package-sha256 }}
+          AM_PACKAGE: ${{ needs.package.outputs.package-name }}
+        run: |
+          actual=$(sha256sum "dist/$AM_PACKAGE" | cut -d' ' -f1)
+          echo "expected=$AM_EXPECTED_SHA"
+          echo "actual  =$actual"
+          if [ "$actual" != "$AM_EXPECTED_SHA" ]; then
+            echo "the downloaded artifact does not match what the Windows job built" >&2
+            exit 1
+          fi
+          sha256sum -c "dist/$AM_PACKAGE.sha256"
+
+      - name: Validate the downloaded package again
+        env:
+          AM_PACKAGE: ${{ needs.package.outputs.package-name }}
+          AM_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 -m unittest discover -s tests/packaging
+          python3 scripts/validate_windows_package.py "dist/$AM_PACKAGE" --version "$AM_VERSION"
+
+      - name: Write the release notes
+        env:
+          AM_PACKAGE: ${{ needs.package.outputs.package-name }}
+          AM_VERSION: ${{ needs.prepare.outputs.version }}
+          AM_SHA: ${{ needs.package.outputs.package-sha256 }}
+          AM_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          minimum=$(python3 -c "import sys; sys.path.insert(0, 'scripts'); import package_windows; print(package_windows.MINIMUM_XRMTOOLBOX_VERSION)")
+          date=$(date -u '+%Y-%m-%d %H:%M UTC')
+          sed -e "s/@@VERSION@@/$AM_VERSION/g" \
+              -e "s/@@ZIP_NAME@@/$AM_PACKAGE/g" \
+              -e "s|@@SHA256@@|$AM_SHA|g" \
+              -e "s/@@MINIMUM_XRMTOOLBOX_VERSION@@/$minimum/g" \
+              -e "s|@@RUN_URL@@|$AM_RUN|g" \
+              -e "s/@@DATE@@/$date/g" \
+              packaging/release-notes.md > release-notes.md
+          if grep -q '@@' release-notes.md; then
+            echo 'a token in packaging/release-notes.md was not substituted' >&2
+            grep -n '@@' release-notes.md >&2
+            exit 1
+          fi
+          cat release-notes.md
+
+      - name: Create the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AM_TAG: ${{ needs.prepare.outputs.tag }}
+          AM_PACKAGE: ${{ needs.package.outputs.package-name }}
+        run: |
+          gh release create "$AM_TAG" \
+            "dist/$AM_PACKAGE" \
+            "dist/$AM_PACKAGE.sha256" \
+            --target "$AM_TAG" \
+            --title "Automation Monitor $AM_TAG" \
+            --notes-file release-notes.md \
+            --prerelease
+

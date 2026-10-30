@@ -5,5 +5,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>AutomationMonitor.Core</AssemblyName>
     <RootNamespace>AutomationMonitor.Core</RootNamespace>
+    <!--
+      Kept in step with the plugin so both shipped assemblies carry the release
+      version the package manifest advertises. CI overrides it with -p:Version.
+    -->
+    <Version>0.1.0</Version>
   </PropertyGroup>
 </Project>

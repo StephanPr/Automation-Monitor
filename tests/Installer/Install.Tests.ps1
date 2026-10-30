@@ -20,7 +20,7 @@ BeforeAll {
     # AfterAll run in the Run phase. Shared paths and helper functions therefore have to be
     # established inside a top-level BeforeAll, whose scope every child block inherits.
 
-    $RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $RepoRoot = Split-Path (Split-Path -LiteralPath $PSScriptRoot -Parent) -Parent
     $InstallerPath = Join-Path $RepoRoot 'packaging\Install.ps1'
     $CmdPath = Join-Path $RepoRoot 'packaging\Install.cmd'
 
@@ -28,12 +28,130 @@ BeforeAll {
     if (-not (Test-Path -LiteralPath $InstallerPath)) { throw "installer not found at $InstallerPath" }
     if (-not (Test-Path -LiteralPath $CmdPath)) { throw "Install.cmd not found at $CmdPath" }
 
+    # Record how the runner spells TEMP next to that folder's real name: on a GitHub Windows
+    # runner these two differ (8.3 vs long form) and every path comparison in this suite has to
+    # cope with that, so the log should show the condition rather than hide it.
+    if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP)) {
+        Write-Host ('temp as offered   : ' + $env:TEMP)
+        Write-Host ('temp as resolved  : ' + (Get-Item -LiteralPath $env:TEMP).FullName)
+    }
+
     function New-TempRoot {
         param([string] $Name)
         # Spaces and parentheses are the point: real Windows paths have both.
         $root = Join-Path $env:TEMP ('AutomationMonitor.Installer (' + $Name + ' ' + (Get-Random) + ')')
-        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        New-Item -ItemType Directory -LiteralPath $root -Force | Out-Null
         return $root
+    }
+
+    function Get-CanonicalPath {
+        <#
+            The same directory has two spellings on a Windows runner: the 8.3 form
+            $env:TEMP arrives in (C:\Users\RUNNER~1) and the long form
+            (C:\Users\runneradmin). Install.ps1 runs under Windows PowerShell 5.1, where
+            [System.IO.Path]::GetFullPath goes through the Win32 full-path API and returns
+            long names for components that exist, while a path a test builds with Join-Path
+            stays exactly as $env:TEMP spelled it. Comparing those two as text is meaningless,
+            so resolve the deepest existing ancestor to its true name and re-append the part
+            that does not exist yet - which is also how a dry-run target must be compared.
+        #>
+        param([string] $Path)
+
+        $full = [System.IO.Path]::GetFullPath($Path)
+        $existing = $full
+        while ($existing -and -not (Test-Path -LiteralPath $existing)) {
+            $parent = [System.IO.Path]::GetDirectoryName($existing)
+            if (-not $parent -or $parent -eq $existing) { break }
+            $existing = $parent
+        }
+        if (-not $existing -or -not (Test-Path -LiteralPath $existing)) { return $full }
+
+        $resolved = (Get-Item -LiteralPath $existing).FullName
+        $tail = $full.Substring($existing.Length).Replace('\', '/').Trim('/')
+        foreach ($segment in $tail.Split('/')) {
+            if ($segment) { $resolved = [System.IO.Path]::Combine($resolved, $segment) }
+        }
+        return $resolved
+    }
+
+    function Get-InstallerReportedPath {
+        <#
+            Reads one labelled path out of the installer's own transcript ('storage' or
+            'target') instead of searching the whole output for a substring. Returns $null
+            when the installer never printed that line, so a missing statement fails the
+            test instead of quietly matching some other text.
+        #>
+        param([string] $Text, [string] $Field)
+
+        $pattern = '(?m)^\[AutomationMonitor\.Install\]\s*' + [regex]::Escape($Field) + '\s*:\s*(.+?)\s*$'
+        $match = [regex]::Match($Text, $pattern)
+        if (-not $match.Success) { return $null }
+        return $match.Groups[1].Value
+    }
+
+    function Read-CapturedStream {
+        param([string] $OutFile, [string] $ErrFile)
+        $text = ''
+        foreach ($file in @($OutFile, $ErrFile)) {
+            if (Test-Path -LiteralPath $file) {
+                $chunk = Get-Content -LiteralPath $file -Raw
+                if ($chunk) { $text = $text + $chunk + [System.Environment]::NewLine }
+            }
+        }
+        return $text
+    }
+
+    function Invoke-CmdEntry {
+        <#
+            Runs Install.cmd the way an unattended caller would: through cmd.exe with the batch
+            path and every argument quoted. cmd removes the outermost quote pair of a /c payload
+            that begins with a quote and holds more than two quotes, so the whole payload needs a
+            pair of its own - without it the batch path is cut at its first space and cmd answers
+            "The filename, directory name, or volume label syntax is incorrect." without ever
+            starting the installer. /d keeps any machine AutoRun out of the way.
+            The exit code is only read once the process is confirmed to have exited, because the
+            timed WaitForExit overload alone does not refresh the exit information ExitCode reads.
+        #>
+        param(
+            [string] $Arguments,
+            [string] $Log,
+            [string] $ErrorLog,
+            [int] $TimeoutMs = 90000
+        )
+
+        $commandLine = '/d /c ""' + $Arguments + '"'
+        $proc = $null
+        try {
+            # No -WindowStyle here: redirecting the streams forces UseShellExecute=false, and a
+            # window-style request alongside that is a parameter conflict, not a preference.
+            $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $commandLine -PassThru `
+                -RedirectStandardOutput $Log -RedirectStandardError $ErrorLog
+        }
+        catch {
+            throw "Start-Process could not launch cmd.exe with: $commandLine`n$($_.Exception.Message)"
+        }
+        try {
+            if (-not $proc.WaitForExit($TimeoutMs)) {
+                try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+                try { $null = $proc.WaitForExit(5000) } catch { }
+                return [pscustomobject]@{
+                    TimedOut   = $true
+                    ExitCode   = $null
+                    Output     = (Read-CapturedStream -OutFile $Log -ErrFile $ErrorLog)
+                    CommandLine = $commandLine
+                }
+            }
+            $proc.WaitForExit()
+            return [pscustomobject]@{
+                TimedOut   = $false
+                ExitCode   = $proc.ExitCode
+                Output     = (Read-CapturedStream -OutFile $Log -ErrFile $ErrorLog)
+                CommandLine = $commandLine
+            }
+        }
+        finally {
+            if ($proc) { $proc.Dispose() }
+        }
     }
 
     function Get-Sha256 {
@@ -57,7 +175,7 @@ BeforeAll {
         )
 
         $payload = Join-Path $Root 'plugin'
-        New-Item -ItemType Directory -Path $payload -Force | Out-Null
+        New-Item -ItemType Directory -LiteralPath $payload -Force | Out-Null
         [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Core.dll'), $CoreBytes)
         [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Plugin.dll'), $PluginBytes)
         if ($null -ne $ExtraBytes) {
@@ -66,8 +184,8 @@ BeforeAll {
         }
 
         $files = @(
-            [ordered]@{ name = 'AutomationMonitor.Core.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Core.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Core.dll')).Length; target = 'Plugins' }
-            [ordered]@{ name = 'AutomationMonitor.Plugin.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Plugin.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Plugin.dll')).Length; target = 'Plugins' }
+            [ordered]@{ name = 'AutomationMonitor.Core.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Core.dll')); size = (Get-Item -LiteralPath (Join-Path $payload 'AutomationMonitor.Core.dll')).Length; target = 'Plugins' }
+            [ordered]@{ name = 'AutomationMonitor.Plugin.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Plugin.dll')); size = (Get-Item -LiteralPath (Join-Path $payload 'AutomationMonitor.Plugin.dll')).Length; target = 'Plugins' }
         )
         $manifest = [ordered]@{
             schemaVersion            = $SchemaVersion
@@ -156,7 +274,7 @@ Describe 'Automation Monitor installer' {
             $root = New-TempRoot -Name 'fresh'
             $storage = Join-Path $root 'XrmToolBox'
             $package = New-TestPackage -Root (Join-Path $root 'package')
-            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $plugins = Join-Path $storage 'Plugins'
         }
@@ -165,7 +283,11 @@ Describe 'Automation Monitor installer' {
 
         It 'succeeds and reports the standard Plugins directory it wrote to' {
             $result.ExitCode | Should -Be 0
-            $result.Output | Should -Match ([regex]::Escape($plugins))
+            $because = 'installer output: ' + $result.Output
+            (Get-InstallerReportedPath -Text $result.Output -Field 'storage') |
+                Should -Be (Get-CanonicalPath -Path $storage) -Because $because
+            (Get-InstallerReportedPath -Text $result.Output -Field 'target') |
+                Should -Be (Get-CanonicalPath -Path $plugins) -Because $because
             $result.Output | Should -Match 'installed Automation Monitor'
         }
 
@@ -194,7 +316,7 @@ Describe 'Automation Monitor installer' {
             $root = New-TempRoot -Name 'strayhost'
             $storage = Join-Path $root 'XrmToolBox'
             $package = New-TestPackage -Root (Join-Path $root 'package') -ExtraBytes ([System.Text.Encoding]::ASCII.GetBytes('HOST-ASSEMBLY'))
-            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $plugins = Join-Path $storage 'Plugins'
         }
@@ -214,7 +336,8 @@ Describe 'Automation Monitor installer' {
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
             $package = New-TestPackage -Root (Join-Path $root 'package')
-            New-Item -ItemType Directory -Path $plugins -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $plugins -Force | Out-Null
 
             # Another tool's assembly, plus a folder-based tool. Fixed content and a
             # deliberate timestamp make any touch by our installer visible.
@@ -223,7 +346,7 @@ Describe 'Automation Monitor installer' {
             $otherBefore = Get-Sha256 $otherDll
             $otherTimeBefore = (Get-Item -LiteralPath $otherDll).LastWriteTime
             $otherSub = Join-Path $plugins 'AnotherTool'
-            New-Item -ItemType Directory -Path $otherSub -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $otherSub -Force | Out-Null
             $subDll = Join-Path $otherSub 'AutomationMonitor.Core.dll'
             [System.IO.File]::WriteAllBytes($subDll, [System.Text.Encoding]::ASCII.GetBytes('SOMEONE-ELSES-COPY'))
             $subBefore = Get-Sha256 $subDll
@@ -252,6 +375,9 @@ Describe 'Automation Monitor installer' {
             $root = New-TempRoot -Name 'upgrade'
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
+            # A context that simulates an earlier installation has to lay the storage root down
+            # itself: the installer refuses to invent one, and that refusal is deliberate.
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $firstPackage = New-TestPackage -Root (Join-Path $root 'package1') -Version '0.1.0-test' `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-PLUGIN-BYTES'))
@@ -293,6 +419,7 @@ Describe 'Automation Monitor installer' {
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
             $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $first = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $second = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
         }
@@ -319,11 +446,15 @@ Describe 'Automation Monitor installer' {
             $root = New-TempRoot -Name 'rollback'
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $oldPackage = New-TestPackage -Root (Join-Path $root 'package1') `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-PLUGIN-BYTES'))
             $null = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $oldPackage }
 
+            # The neighbouring plugin is planted by the fixture, not by the installer, so the
+            # Plugins directory must exist here whether or not the first install succeeded.
+            New-Item -ItemType Directory -LiteralPath $plugins -Force | Out-Null
             [System.IO.File]::WriteAllBytes((Join-Path $plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
             $otherBefore = Get-Sha256 (Join-Path $plugins 'OtherPlugin.dll')
             $oldCore = Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Core.dll')
@@ -374,7 +505,7 @@ Describe 'Automation Monitor installer' {
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
             $package = New-TestPackage -Root (Join-Path $root 'package')
-            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
         }
 
         AfterEach { Remove-TempRoot -Root $root }
@@ -456,29 +587,31 @@ Describe 'Automation Monitor installer' {
                 Set-ItResult -Skipped -Because 'the default storage folder already exists here'
                 return
             }
-            New-Item -ItemType Directory -Path $defaultRoot -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $defaultRoot -Force | Out-Null
             $createdDefault = $true
 
             $result = Invoke-Installer -Parameters @{ PackageRoot = $package }
             $result.ExitCode | Should -Be 0
-            $result.Output | Should -Match ([regex]::Escape((Join-Path $defaultRoot 'Plugins')))
+            (Get-InstallerReportedPath -Text $result.Output -Field 'target') |
+                Should -Be (Get-CanonicalPath -Path (Join-Path $defaultRoot 'Plugins'))
             Test-Path -LiteralPath (Join-Path $defaultRoot 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
         }
 
         It 'honours the environment override for a portable installation' {
             $portable = Join-Path $root 'XrmToolBox (portable)'
-            New-Item -ItemType Directory -Path $portable -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $portable -Force | Out-Null
             $env:AUTOMATION_MONITOR_XTB_ROOT = $portable
 
             $result = Invoke-Installer -Parameters @{ PackageRoot = $package }
             $result.ExitCode | Should -Be 0
-            $result.Output | Should -Match ([regex]::Escape((Join-Path $portable 'Plugins')))
+            (Get-InstallerReportedPath -Text $result.Output -Field 'target') |
+                Should -Be (Get-CanonicalPath -Path (Join-Path $portable 'Plugins'))
             Test-Path -LiteralPath (Join-Path $portable 'Plugins\AutomationMonitor.Core.dll') | Should -BeTrue
         }
 
         It 'lets -StorageRoot win over the environment for an /overridepath install' {
             $explicit = Join-Path $root 'chosen (by hand)'
-            New-Item -ItemType Directory -Path $explicit -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $explicit -Force | Out-Null
             $env:AUTOMATION_MONITOR_XTB_ROOT = (Join-Path $root 'ignored')
 
             $result = Invoke-Installer -Parameters @{ StorageRoot = $explicit; PackageRoot = $package }
@@ -489,11 +622,14 @@ Describe 'Automation Monitor installer' {
 
         It 'previews the target with -DryRun and writes nothing' {
             $target = Join-Path $root 'preview (nothing here)'
-            New-Item -ItemType Directory -Path $target -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $target -Force | Out-Null
 
             $result = Invoke-Installer -Parameters @{ StorageRoot = $target; PackageRoot = $package; DryRun = $true }
             $result.ExitCode | Should -Be 0
-            $result.Output | Should -Match ([regex]::Escape((Join-Path $target 'Plugins')))
+            # Plugins does not exist in a dry run, so the comparison is against the canonical
+            # form of an existing parent plus the directory the installer says it would create.
+            (Get-InstallerReportedPath -Text $result.Output -Field 'target') |
+                Should -Be (Get-CanonicalPath -Path (Join-Path $target 'Plugins'))
             $result.Output | Should -Match 'dry run'
             Test-Path -LiteralPath (Join-Path $target 'Plugins') | Should -BeFalse
         }
@@ -505,7 +641,11 @@ Describe 'Automation Monitor installer' {
             $storage = Join-Path $root 'XrmToolBox'
             $plugins = Join-Path $storage 'Plugins'
             $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
             $null = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
+            # The neighbour file is planted by the fixture, so its directory has to exist
+            # independently of whatever the install above managed to do.
+            New-Item -ItemType Directory -LiteralPath $plugins -Force | Out-Null
             [System.IO.File]::WriteAllBytes((Join-Path $plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
             $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package; Uninstall = $true }
         }
@@ -534,23 +674,22 @@ Describe 'Automation Monitor installer' {
             $root = New-TempRoot -Name 'cmd'
             $storage = Join-Path $root 'XrmToolBox'
             $package = New-TestPackage -Root (Join-Path $root 'package')
-            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            New-Item -ItemType Directory -LiteralPath $storage -Force | Out-Null
         }
 
         AfterAll { Remove-TempRoot -Root $root }
 
         It 'finishes without waiting for a key when AM_NO_PAUSE is set' {
             $log = Join-Path $root 'install.log'
-            $line = '"' + $CmdPath + '" -StorageRoot "' + $storage + '" -PackageRoot "' + $package + '"'
+            $errLog = Join-Path $root 'install.err.log'
+            $arguments = '"' + $CmdPath + '" -StorageRoot "' + $storage + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
-                $proc = Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $line) -PassThru -WindowStyle Hidden -RedirectStandardOutput $log
-                if (-not $proc.WaitForExit(90000)) {
-                    try { $proc.Kill() } catch { }
-                    throw 'Install.cmd never returned: it is still waiting for interactive input.'
-                }
-                $proc.ExitCode | Should -Be 0
-                (Get-Content -LiteralPath $log -Raw) | Should -Match 'installed Automation Monitor'
+                $run = Invoke-CmdEntry -Arguments $arguments -Log $log -ErrorLog $errLog
+                $because = 'temp: ' + $env:TEMP + ' | cmd line: ' + $run.CommandLine + ' | output: ' + $run.Output
+                $run.TimedOut | Should -BeFalse -Because ('Install.cmd must return by itself when AM_NO_PAUSE is set; ' + $because)
+                $run.ExitCode | Should -Be 0 -Because $because
+                $run.Output | Should -Match 'installed Automation Monitor' -Because $because
                 Test-Path -LiteralPath (Join-Path $storage 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
             }
             finally {
@@ -560,17 +699,16 @@ Describe 'Automation Monitor installer' {
 
         It 'propagates the failure exit code without blocking' {
             $log = Join-Path $root 'failed.log'
+            $errLog = Join-Path $root 'failed.err.log'
             $missing = Join-Path $root 'not installed (yet)'
-            $line = '"' + $CmdPath + '" -StorageRoot "' + $missing + '" -PackageRoot "' + $package + '"'
+            $arguments = '"' + $CmdPath + '" -StorageRoot "' + $missing + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
-                $proc = Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $line) -PassThru -WindowStyle Hidden -RedirectStandardOutput $log
-                if (-not $proc.WaitForExit(90000)) {
-                    try { $proc.Kill() } catch { }
-                    throw 'Install.cmd blocked on a failure path instead of returning the code.'
-                }
-                $proc.ExitCode | Should -Not -Be 0
-                (Get-Content -LiteralPath $log -Raw) | Should -Match 'STORAGE_ROOT_MISSING'
+                $run = Invoke-CmdEntry -Arguments $arguments -Log $log -ErrorLog $errLog
+                $because = 'temp: ' + $env:TEMP + ' | cmd line: ' + $run.CommandLine + ' | output: ' + $run.Output
+                $run.TimedOut | Should -BeFalse -Because ('Install.cmd must return the code, not wait for a key, on a failure path; ' + $because)
+                $run.ExitCode | Should -Not -Be 0 -Because $because
+                $run.Output | Should -Match 'STORAGE_ROOT_MISSING' -Because $because
             }
             finally {
                 $env:AM_NO_PAUSE = $null

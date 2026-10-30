@@ -10,12 +10,21 @@
     <Company>Automation Monitor</Company>
     <Description>Local, read-only Power Automate and Logic Apps monitor for XrmToolBox.</Description>
     <Version>0.1.0</Version>
+    <Nullable>enable</Nullable>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
   </PropertyGroup>
   <ItemGroup>
     <!-- Build-only .NET Framework reference assemblies; never ship them. -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="XrmToolBoxPackage" Version="1.2025.10.74" />
+    <!--
+      Compile-time alignment only. XrmToolBox.Extensibility 1.2025.10.74 is built against
+      McTools.Xrm.Connection 1.2025.9.64, while XrmToolBoxPackage still floats the older
+      1.2025.7.63; without this the compiler refuses to read ConnectionDetail (CS1705).
+      Runtime assets are excluded because the XrmToolBox host already ships that assembly:
+      the plugin artifact must stay Plugin.dll + Core.dll, never a second connection library.
+    -->
+    <PackageReference Include="MSCrmTools.Xrm.Connection" Version="1.2025.9.64" ExcludeAssets="runtime" />
     <ProjectReference Include="../AutomationMonitor.Core/AutomationMonitor.Core.csproj" />
     <!-- Explicit .NET Framework WinForms references allow non-designer source. -->
     <Reference Include="System.Windows.Forms" />

@@ -2,6 +2,14 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Unit tests core (Linux)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["test", "${workspaceFolder}/tests/AutomationMonitor.Core.Tests/AutomationMonitor.Core.Tests.csproj", "--configuration", "Debug"],
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
       "label": "Test core (Linux)",
       "type": "shell",
       "command": "dotnet",

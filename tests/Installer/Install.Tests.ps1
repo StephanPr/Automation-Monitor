@@ -15,368 +15,414 @@
 
 Set-StrictMode -Version Latest
 
-$script:RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$script:InstallerPath = Join-Path $script:RepoRoot 'packaging\Install.ps1'
-$script:CmdPath = Join-Path $script:RepoRoot 'packaging\Install.cmd'
+BeforeAll {
+    # Pester 5 executes this file body during Discovery only, while BeforeAll, It and
+    # AfterAll run in the Run phase. Shared paths and helper functions therefore have to be
+    # established inside a top-level BeforeAll, whose scope every child block inherits.
 
-function New-TempRoot {
-    param([string] $Name)
-    # Spaces and parentheses are the point: real Windows paths have both.
-    $root = Join-Path $env:TEMP ('AutomationMonitor.Installer (' + $Name + ' ' + (Get-Random) + ')')
-    New-Item -ItemType Directory -Path $root -Force | Out-Null
-    return $root
-}
+    $RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $InstallerPath = Join-Path $RepoRoot 'packaging\Install.ps1'
+    $CmdPath = Join-Path $RepoRoot 'packaging\Install.cmd'
 
-function Get-Sha256 {
-    param([string] $Path)
-    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-}
+    # Fail loudly here rather than producing 35 confusing failures downstream.
+    if (-not (Test-Path -LiteralPath $InstallerPath)) { throw "installer not found at $InstallerPath" }
+    if (-not (Test-Path -LiteralPath $CmdPath)) { throw "Install.cmd not found at $CmdPath" }
 
-function New-TestPackage {
-    <#
-        Builds a package folder shaped exactly like the shipped zip: plugin\ with the
-        two assemblies and a manifest whose checksums are computed from the bytes on
-        disk. Content is fake; the shape is real.
-    #>
-    param(
-        [string] $Root,
-        [string] $Version = '0.1.0-test',
-        [byte[]] $CoreBytes = [System.Text.Encoding]::ASCII.GetBytes('CORE-ASSEMBLY-BYTES'),
-        [byte[]] $PluginBytes = [System.Text.Encoding]::ASCII.GetBytes('PLUGIN-ASSEMBLY-BYTES'),
-        [byte[]] $ExtraBytes = $null,
-        [int] $SchemaVersion = 1
-    )
-
-    $payload = Join-Path $Root 'plugin'
-    New-Item -ItemType Directory -Path $payload -Force | Out-Null
-    [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Core.dll'), $CoreBytes)
-    [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Plugin.dll'), $PluginBytes)
-    if ($null -ne $ExtraBytes) {
-        # A stray host assembly in the build output must never reach Plugins.
-        [System.IO.File]::WriteAllBytes((Join-Path $payload 'Newtonsoft.Json.dll'), $ExtraBytes)
+    function New-TempRoot {
+        param([string] $Name)
+        # Spaces and parentheses are the point: real Windows paths have both.
+        $root = Join-Path $env:TEMP ('AutomationMonitor.Installer (' + $Name + ' ' + (Get-Random) + ')')
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        return $root
     }
 
-    $files = @(
-        [ordered]@{ name = 'AutomationMonitor.Core.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Core.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Core.dll')).Length; target = 'Plugins' }
-        [ordered]@{ name = 'AutomationMonitor.Plugin.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Plugin.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Plugin.dll')).Length; target = 'Plugins' }
-    )
-    $manifest = [ordered]@{
-        schemaVersion            = $SchemaVersion
-        product                  = 'Automation Monitor'
-        component                = 'AutomationMonitor.Plugin'
-        version                  = $Version
-        assemblyVersion          = '0.1.0'
-        targetFramework          = 'net48'
-        minimumXrmToolBoxVersion = '1.2025.10.74'
-        files                    = $files
+    function Get-Sha256 {
+        param([string] $Path)
+        (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $payload 'plugin.manifest.json') -Encoding UTF8
-    return $Root
-}
 
-function Invoke-Installer {
-    <#
-        Runs the installer the way a customer's double-click does: a real Windows
-        PowerShell 5.1 child process with -File. That keeps `exit` inside the
-        installer from ending this test run, and it proves the -File argument
-        binding path that Install.cmd relies on instead of a dot-sourced shortcut.
-    #>
-    param([hashtable] $Parameters = @{})
+    function New-TestPackage {
+        <#
+            Builds a package folder shaped exactly like the shipped zip: plugin\ with the
+            two assemblies and a manifest whose checksums are computed from the bytes on
+            disk. Content is fake; the shape is real.
+        #>
+        param(
+            [string] $Root,
+            [string] $Version = '0.1.0-test',
+            [byte[]] $CoreBytes = [System.Text.Encoding]::ASCII.GetBytes('CORE-ASSEMBLY-BYTES'),
+            [byte[]] $PluginBytes = [System.Text.Encoding]::ASCII.GetBytes('PLUGIN-ASSEMBLY-BYTES'),
+            [byte[]] $ExtraBytes = $null,
+            [int] $SchemaVersion = 1
+        )
 
-    $arguments = @()
-    foreach ($key in $Parameters.Keys) {
-        $value = $Parameters[$key]
-        if ($value -is [switch]) {
-            if ($value.IsPresent) { $arguments += "-$key" }
-            continue
+        $payload = Join-Path $Root 'plugin'
+        New-Item -ItemType Directory -Path $payload -Force | Out-Null
+        [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Core.dll'), $CoreBytes)
+        [System.IO.File]::WriteAllBytes((Join-Path $payload 'AutomationMonitor.Plugin.dll'), $PluginBytes)
+        if ($null -ne $ExtraBytes) {
+            # A stray host assembly in the build output must never reach Plugins.
+            [System.IO.File]::WriteAllBytes((Join-Path $payload 'Newtonsoft.Json.dll'), $ExtraBytes)
         }
-        if ($value -is [bool]) {
-            if ($value) { $arguments += "-$key" }
-            continue
+
+        $files = @(
+            [ordered]@{ name = 'AutomationMonitor.Core.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Core.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Core.dll')).Length; target = 'Plugins' }
+            [ordered]@{ name = 'AutomationMonitor.Plugin.dll'; sha256 = (Get-Sha256 (Join-Path $payload 'AutomationMonitor.Plugin.dll')); size = (Get-Item (Join-Path $payload 'AutomationMonitor.Plugin.dll')).Length; target = 'Plugins' }
+        )
+        $manifest = [ordered]@{
+            schemaVersion            = $SchemaVersion
+            product                  = 'Automation Monitor'
+            component                = 'AutomationMonitor.Plugin'
+            version                  = $Version
+            assemblyVersion          = '0.1.0'
+            targetFramework          = 'net48'
+            minimumXrmToolBoxVersion = '1.2025.10.74'
+            files                    = $files
         }
-        $arguments += "-$key"
-        $arguments += [string] $value
+        $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $payload 'plugin.manifest.json') -Encoding UTF8
+        return $Root
     }
 
-    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:InstallerPath @arguments 2>&1 | Out-String
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
-}
+    function Invoke-Installer {
+        <#
+            Runs the installer the way a customer's double-click does: a real Windows
+            PowerShell 5.1 child process with -File. That keeps `exit` inside the
+            installer from ending this test run, and it proves the -File argument
+            binding path that Install.cmd relies on instead of a dot-sourced shortcut.
+        #>
+        param([hashtable] $Parameters = @{})
 
+        $arguments = @()
+        foreach ($key in $Parameters.Keys) {
+            $value = $Parameters[$key]
+            if ($value -is [switch]) {
+                if ($value.IsPresent) { $arguments += "-$key" }
+                continue
+            }
+            if ($value -is [bool]) {
+                if ($value) { $arguments += "-$key" }
+                continue
+            }
+            $arguments += "-$key"
+            $arguments += [string] $value
+        }
+
+        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallerPath @arguments 2>&1 | Out-String
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    }
+
+    function Remove-TempRoot {
+        <#
+            Teardown for the throwaway folders this suite creates under $env:TEMP.
+
+            Two rules make this safe to call from any AfterAll or AfterEach:
+            - it deletes nothing outside the system temp directory, so an empty or
+              wrong -Root can never reach an XrmToolBox installation or a source tree;
+            - it never throws. A teardown exception would mask the real test result,
+              while a leftover TEMP folder is harmless to the runner's own cleanup.
+        #>
+        param([string] $Root)
+
+        if ([string]::IsNullOrWhiteSpace($Root)) { return }
+
+        $temp = [System.IO.Path]::GetTempPath().TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        $full = [System.IO.Path]::GetFullPath($Root)
+        if (-not $full.StartsWith($temp + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Warning ("refusing to remove '{0}': outside the temp directory" -f $full)
+            return
+        }
+
+        if (-not (Test-Path -LiteralPath $full)) { return }
+        try {
+            Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            # A sibling teardown may still be releasing a handle on the last file.
+            Start-Sleep -Milliseconds 250
+            try {
+                Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Warning ("could not remove '{0}': {1}" -f $full, $_.Exception.Message)
+            }
+        }
+    }
+}
 
 Describe 'Automation Monitor installer' {
 
     Context 'Fresh installation' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'fresh'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            New-Item -ItemType Directory -Path $script:storage -Force | Out-Null
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
-            $script:plugins = Join-Path $script:storage 'Plugins'
+            $root = New-TempRoot -Name 'fresh'
+            $storage = Join-Path $root 'XrmToolBox'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
+            $plugins = Join-Path $storage 'Plugins'
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'succeeds and reports the standard Plugins directory it wrote to' {
-            $script:result.ExitCode | Should -Be 0
-            $script:result.Output | Should -Match ([regex]::Escape($script:plugins))
-            $script:result.Output | Should -Match 'installed Automation Monitor'
+            $result.ExitCode | Should -Be 0
+            $result.Output | Should -Match ([regex]::Escape($plugins))
+            $result.Output | Should -Match 'installed Automation Monitor'
         }
 
         It 'creates the Plugins directory under the XrmToolBox storage root' {
-            Test-Path -LiteralPath $script:plugins -PathType Container | Should -BeTrue
+            Test-Path -LiteralPath $plugins -PathType Container | Should -BeTrue
         }
 
         It 'places exactly the two manifest assemblies, byte-identical to the package' {
-            $installed = @(Get-ChildItem -LiteralPath $script:plugins -File | Select-Object -ExpandProperty Name)
+            $installed = @(Get-ChildItem -LiteralPath $plugins -File | Select-Object -ExpandProperty Name)
             $installed | Should -Be @('AutomationMonitor.Core.dll', 'AutomationMonitor.Plugin.dll')
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Core.dll')) | Should -Be (Get-Sha256 (Join-Path $script:package 'plugin\AutomationMonitor.Core.dll'))
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll')) | Should -Be (Get-Sha256 (Join-Path $script:package 'plugin\AutomationMonitor.Plugin.dll'))
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Core.dll')) | Should -Be (Get-Sha256 (Join-Path $package 'plugin\AutomationMonitor.Core.dll'))
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Plugin.dll')) | Should -Be (Get-Sha256 (Join-Path $package 'plugin\AutomationMonitor.Plugin.dll'))
         }
 
         It 'tells the user to restart XrmToolBox' {
-            $script:result.Output | Should -Match 'Restart XrmToolBox'
+            $result.Output | Should -Match 'Restart XrmToolBox'
         }
 
         It 'leaves no backup folder when there was nothing to back up' {
-            Test-Path -LiteralPath (Join-Path $script:storage 'PluginBackups') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $storage 'PluginBackups') | Should -BeFalse
         }
     }
 
     Context 'A stray host assembly in the package payload' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'strayhost'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package') -ExtraBytes ([System.Text.Encoding]::ASCII.GetBytes('HOST-ASSEMBLY'))
-            New-Item -ItemType Directory -Path $script:storage -Force | Out-Null
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
-            $script:plugins = Join-Path $script:storage 'Plugins'
+            $root = New-TempRoot -Name 'strayhost'
+            $storage = Join-Path $root 'XrmToolBox'
+            $package = New-TestPackage -Root (Join-Path $root 'package') -ExtraBytes ([System.Text.Encoding]::ASCII.GetBytes('HOST-ASSEMBLY'))
+            New-Item -ItemType Directory -Path $storage -Force | Out-Null
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
+            $plugins = Join-Path $storage 'Plugins'
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'installs only the manifest entries and never the host assembly' {
-            $script:result.ExitCode | Should -Be 0
-            Test-Path -LiteralPath (Join-Path $script:plugins 'Newtonsoft.Json.dll') | Should -BeFalse
-            @(Get-ChildItem -LiteralPath $script:plugins -File).Count | Should -Be 2
+            $result.ExitCode | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $plugins 'Newtonsoft.Json.dll') | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $plugins -File).Count | Should -Be 2
         }
     }
 
     Context 'Neighbouring plugins' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'neighbours'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            New-Item -ItemType Directory -Path $script:plugins -Force | Out-Null
+            $root = New-TempRoot -Name 'neighbours'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -Path $plugins -Force | Out-Null
 
             # Another tool's assembly, plus a folder-based tool. Fixed content and a
             # deliberate timestamp make any touch by our installer visible.
-            $script:otherDll = Join-Path $script:plugins 'OtherPlugin.dll'
-            [System.IO.File]::WriteAllBytes($script:otherDll, [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
-            $script:otherBefore = Get-Sha256 $script:otherDll
-            $script:otherTimeBefore = (Get-Item -LiteralPath $script:otherDll).LastWriteTime
-            $script:otherSub = Join-Path $script:plugins 'AnotherTool'
-            New-Item -ItemType Directory -Path $script:otherSub -Force | Out-Null
-            $script:subDll = Join-Path $script:otherSub 'AutomationMonitor.Core.dll'
-            [System.IO.File]::WriteAllBytes($script:subDll, [System.Text.Encoding]::ASCII.GetBytes('SOMEONE-ELSES-COPY'))
-            $script:subBefore = Get-Sha256 $script:subDll
+            $otherDll = Join-Path $plugins 'OtherPlugin.dll'
+            [System.IO.File]::WriteAllBytes($otherDll, [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
+            $otherBefore = Get-Sha256 $otherDll
+            $otherTimeBefore = (Get-Item -LiteralPath $otherDll).LastWriteTime
+            $otherSub = Join-Path $plugins 'AnotherTool'
+            New-Item -ItemType Directory -Path $otherSub -Force | Out-Null
+            $subDll = Join-Path $otherSub 'AutomationMonitor.Core.dll'
+            [System.IO.File]::WriteAllBytes($subDll, [System.Text.Encoding]::ASCII.GetBytes('SOMEONE-ELSES-COPY'))
+            $subBefore = Get-Sha256 $subDll
 
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'does not change another plugin''s assembly content or timestamp' {
-            (Get-Sha256 $script:otherDll) | Should -Be $script:otherBefore
-            (Get-Item -LiteralPath $script:otherDll).LastWriteTime | Should -Be $script:otherTimeBefore
+            (Get-Sha256 $otherDll) | Should -Be $otherBefore
+            (Get-Item -LiteralPath $otherDll).LastWriteTime | Should -Be $otherTimeBefore
         }
 
         It 'does not touch a same-named file inside another tool''s subfolder' {
-            (Get-Sha256 $script:subDll) | Should -Be $script:subBefore
+            (Get-Sha256 $subDll) | Should -Be $subBefore
         }
 
         It 'installs into the Plugins directory at the storage root' {
-            Test-Path -LiteralPath (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $plugins 'AutomationMonitor.Plugin.dll') | Should -BeTrue
         }
     }
 
     Context 'Upgrade over an earlier version' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'upgrade'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:firstPackage = New-TestPackage -Root (Join-Path $script:root 'package1') -Version '0.1.0-test' `
+            $root = New-TempRoot -Name 'upgrade'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $firstPackage = New-TestPackage -Root (Join-Path $root 'package1') -Version '0.1.0-test' `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-PLUGIN-BYTES'))
-            $null = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:firstPackage }
+            $null = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $firstPackage }
 
-            $script:secondPackage = New-TestPackage -Root (Join-Path $script:root 'package2') -Version '0.2.0-test' `
+            $secondPackage = New-TestPackage -Root (Join-Path $root 'package2') -Version '0.2.0-test' `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('NEW-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('NEW-PLUGIN-BYTES'))
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:secondPackage }
-            $script:oldCore = Get-Sha256 (Join-Path $script:firstPackage 'plugin\AutomationMonitor.Core.dll')
-            $script:newCore = Get-Sha256 (Join-Path $script:secondPackage 'plugin\AutomationMonitor.Core.dll')
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $secondPackage }
+            $oldCore = Get-Sha256 (Join-Path $firstPackage 'plugin\AutomationMonitor.Core.dll')
+            $newCore = Get-Sha256 (Join-Path $secondPackage 'plugin\AutomationMonitor.Core.dll')
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'installs the new bytes' {
-            $script:result.ExitCode | Should -Be 0
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Core.dll')) | Should -Be $script:newCore
+            $result.ExitCode | Should -Be 0
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Core.dll')) | Should -Be $newCore
         }
 
         It 'backs up the previous assemblies outside the Plugins directory' {
-            $backupRoot = Join-Path $script:storage 'PluginBackups\AutomationMonitor'
+            $backupRoot = Join-Path $storage 'PluginBackups\AutomationMonitor'
             Test-Path -LiteralPath $backupRoot -PathType Container | Should -BeTrue
             $backedUp = @(Get-ChildItem -LiteralPath $backupRoot -Recurse -File -Filter 'AutomationMonitor.Core.dll')
             $backedUp.Count | Should -Be 1
-            (Get-Sha256 $backedUp[0].FullName) | Should -Be $script:oldCore
+            (Get-Sha256 $backedUp[0].FullName) | Should -Be $oldCore
             # A backup folder inside Plugins could be scanned by the host and load twice.
-            @(Get-ChildItem -LiteralPath $script:plugins -Recurse -Directory | Where-Object { $_.Name -like '*backup*' }).Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $plugins -Recurse -Directory | Where-Object { $_.Name -like '*backup*' }).Count | Should -Be 0
         }
 
         It 'says where the previous version was saved' {
-            $script:result.Output | Should -Match 'previous AutomationMonitor.Core.dll saved to'
+            $result.Output | Should -Match 'previous AutomationMonitor.Core.dll saved to'
         }
     }
 
     Context 'Repeating the same installation' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'repeat'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            $script:first = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
-            $script:second = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            $root = New-TempRoot -Name 'repeat'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            $first = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
+            $second = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'succeeds both times' {
-            $script:first.ExitCode | Should -Be 0
-            $script:second.ExitCode | Should -Be 0
+            $first.ExitCode | Should -Be 0
+            $second.ExitCode | Should -Be 0
         }
 
         It 'leaves exactly two assemblies, with no duplicates or temporaries' {
-            $names = @(Get-ChildItem -LiteralPath $script:plugins -Recurse -File | Select-Object -ExpandProperty Name)
+            $names = @(Get-ChildItem -LiteralPath $plugins -Recurse -File | Select-Object -ExpandProperty Name)
             $names | Should -Be @('AutomationMonitor.Core.dll', 'AutomationMonitor.Plugin.dll')
         }
 
         It 'produces byte-identical files' {
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll')) | Should -Be (Get-Sha256 (Join-Path $script:package 'plugin\AutomationMonitor.Plugin.dll'))
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Plugin.dll')) | Should -Be (Get-Sha256 (Join-Path $package 'plugin\AutomationMonitor.Plugin.dll'))
         }
     }
 
     Context 'Rollback when a copy fails halfway' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'rollback'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:oldPackage = New-TestPackage -Root (Join-Path $script:root 'package1') `
+            $root = New-TempRoot -Name 'rollback'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $oldPackage = New-TestPackage -Root (Join-Path $root 'package1') `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('OLD-PLUGIN-BYTES'))
-            $null = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:oldPackage }
+            $null = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $oldPackage }
 
-            [System.IO.File]::WriteAllBytes((Join-Path $script:plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
-            $script:otherBefore = Get-Sha256 (Join-Path $script:plugins 'OtherPlugin.dll')
-            $script:oldCore = Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Core.dll')
-            $script:oldPlugin = Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll')
+            [System.IO.File]::WriteAllBytes((Join-Path $plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
+            $otherBefore = Get-Sha256 (Join-Path $plugins 'OtherPlugin.dll')
+            $oldCore = Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Core.dll')
+            $oldPlugin = Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Plugin.dll')
 
-            $script:newPackage = New-TestPackage -Root (Join-Path $script:root 'package2') `
+            $newPackage = New-TestPackage -Root (Join-Path $root 'package2') `
                 -CoreBytes ([System.Text.Encoding]::ASCII.GetBytes('NEW-CORE-BYTES')) `
                 -PluginBytes ([System.Text.Encoding]::ASCII.GetBytes('NEW-PLUGIN-BYTES'))
 
             # A read handle that denies writers makes the second copy (Plugin.dll sorts
             # last) fail for real, after Core.dll has already been replaced.
-            $script:lock = [System.IO.File]::Open((Join-Path $script:plugins 'AutomationMonitor.Plugin.dll'), 'Open', 'Read', 'Read')
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:newPackage }
+            $lock = [System.IO.File]::Open((Join-Path $plugins 'AutomationMonitor.Plugin.dll'), 'Open', 'Read', 'Read')
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $newPackage }
         }
 
         AfterAll {
-            if ($script:lock) { $script:lock.Dispose() }
-            Remove-TempRoot -Root $script:root
+            if ($lock) { $lock.Dispose() }
+            Remove-TempRoot -Root $root
         }
 
         It 'reports failure with a non-zero exit code' {
-            $script:result.ExitCode | Should -Not -Be 0
-            $script:result.Output | Should -Match 'aborted'
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'aborted'
         }
 
         It 'restores the assembly it had already replaced' {
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Core.dll')) | Should -Be $script:oldCore
-            $script:result.Output | Should -Match 'rolled back AutomationMonitor.Core.dll'
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Core.dll')) | Should -Be $oldCore
+            $result.Output | Should -Match 'rolled back AutomationMonitor.Core.dll'
         }
 
         It 'leaves the assembly it could not write untouched' {
-            (Get-Sha256 (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll')) | Should -Be $script:oldPlugin
+            (Get-Sha256 (Join-Path $plugins 'AutomationMonitor.Plugin.dll')) | Should -Be $oldPlugin
         }
 
         It 'does not leave the new package bytes installed anywhere' {
-            $newCore = Get-Sha256 (Join-Path $script:newPackage 'plugin\AutomationMonitor.Core.dll')
-            @(Get-ChildItem -LiteralPath $script:plugins -Recurse -File | Where-Object { (Get-Sha256 $_.FullName) -eq $newCore }).Count | Should -Be 0
+            $newCore = Get-Sha256 (Join-Path $newPackage 'plugin\AutomationMonitor.Core.dll')
+            @(Get-ChildItem -LiteralPath $plugins -Recurse -File | Where-Object { (Get-Sha256 $_.FullName) -eq $newCore }).Count | Should -Be 0
         }
 
         It 'never touches the neighbouring plugin' {
-            (Get-Sha256 (Join-Path $script:plugins 'OtherPlugin.dll')) | Should -Be $script:otherBefore
+            (Get-Sha256 (Join-Path $plugins 'OtherPlugin.dll')) | Should -Be $otherBefore
         }
     }
 
     Context 'Refusing a broken package without leaving state behind' {
         BeforeEach {
-            $script:root = New-TempRoot -Name 'refuse'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            New-Item -ItemType Directory -Path $script:storage -Force | Out-Null
+            $root = New-TempRoot -Name 'refuse'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -Path $storage -Force | Out-Null
         }
 
-        AfterEach { Remove-TempRoot -Root $script:root }
+        AfterEach { Remove-TempRoot -Root $root }
 
         It 'stops on a missing package assembly' {
-            Remove-Item -LiteralPath (Join-Path $script:package 'plugin\AutomationMonitor.Core.dll') -Force
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            Remove-Item -LiteralPath (Join-Path $package 'plugin\AutomationMonitor.Core.dll') -Force
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'PACKAGE_INCOMPLETE'
-            Test-Path -LiteralPath $script:plugins | Should -BeFalse
+            Test-Path -LiteralPath $plugins | Should -BeFalse
         }
 
         It 'stops on a missing manifest' {
-            Remove-Item -LiteralPath (Join-Path $script:package 'plugin\plugin.manifest.json') -Force
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            Remove-Item -LiteralPath (Join-Path $package 'plugin\plugin.manifest.json') -Force
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'PACKAGE_INCOMPLETE'
-            Test-Path -LiteralPath $script:plugins | Should -BeFalse
+            Test-Path -LiteralPath $plugins | Should -BeFalse
         }
 
         It 'stops when a payload file does not match its checksum' {
-            [System.IO.File]::WriteAllBytes((Join-Path $script:package 'plugin\AutomationMonitor.Core.dll'), [System.Text.Encoding]::ASCII.GetBytes('SWAPPED-BYTES'))
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            [System.IO.File]::WriteAllBytes((Join-Path $package 'plugin\AutomationMonitor.Core.dll'), [System.Text.Encoding]::ASCII.GetBytes('SWAPPED-BYTES'))
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'PACKAGE_HASH_MISMATCH'
-            Test-Path -LiteralPath $script:plugins | Should -BeFalse
+            Test-Path -LiteralPath $plugins | Should -BeFalse
         }
 
         It 'refuses a package from a newer schema instead of guessing' {
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package') -SchemaVersion 2
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
+            $package = New-TestPackage -Root (Join-Path $root 'package') -SchemaVersion 2
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'PACKAGE_UNSUPPORTED'
-            Test-Path -LiteralPath $script:plugins | Should -BeFalse
+            Test-Path -LiteralPath $plugins | Should -BeFalse
         }
 
         It 'refuses to run while the host is still open' {
             # The child process is itself powershell, so naming it exercises the
             # running-host branch for real instead of mocking across a process boundary.
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package; HostName = 'powershell' }
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package; HostName = 'powershell' }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'HOST_RUNNING'
-            Test-Path -LiteralPath $script:plugins | Should -BeFalse
+            Test-Path -LiteralPath $plugins | Should -BeFalse
         }
 
         It 'explains a storage root that does not exist' {
-            $missing = Join-Path $script:root 'Not Installed (yet)'
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $missing; PackageRoot = $script:package }
+            $missing = Join-Path $root 'Not Installed (yet)'
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $missing; PackageRoot = $package }
             $result.ExitCode | Should -Not -Be 0
             $result.Output | Should -Match 'STORAGE_ROOT_MISSING'
         }
@@ -384,63 +430,68 @@ Describe 'Automation Monitor installer' {
 
     Context 'Storage location' {
         BeforeEach {
-            $script:root = New-TempRoot -Name 'storage'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            $script:createdDefault = $false
+            $root = New-TempRoot -Name 'storage'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            # The one test that installs into the default roaming folder sets $createdDefault
+            # together with $defaultParent/$defaultRoot. Pester runs a single test's BeforeEach,
+            # body and AfterEach in one scope, so the teardown below sees exactly what that test
+            # created - and never a sibling test's leftovers. The flag is what stops AfterEach
+            # from ever deleting a real XrmToolBox storage folder this run did not create.
+            $createdDefault = $false
         }
 
         AfterEach {
             $env:AUTOMATION_MONITOR_XTB_ROOT = $null
-            if ($script:createdDefault -and $script:defaultRoot) {
-                Remove-Item -LiteralPath $script:defaultParent -Recurse -Force -ErrorAction SilentlyContinue
+            if ($createdDefault -and $defaultRoot) {
+                Remove-Item -LiteralPath $defaultParent -Recurse -Force -ErrorAction SilentlyContinue
             }
-            Remove-TempRoot -Root $script:root
+            Remove-TempRoot -Root $root
         }
 
         It 'uses the standard roaming storage when nothing overrides it' {
-            $script:defaultParent = Join-Path $env:APPDATA 'MscrmTools'
-            $script:defaultRoot = Join-Path $script:defaultParent 'XrmToolBox'
-            if (Test-Path -LiteralPath $script:defaultRoot) {
+            $defaultParent = Join-Path $env:APPDATA 'MscrmTools'
+            $defaultRoot = Join-Path $defaultParent 'XrmToolBox'
+            if (Test-Path -LiteralPath $defaultRoot) {
                 # Never write into a real XrmToolBox installation on this machine.
                 Set-ItResult -Skipped -Because 'the default storage folder already exists here'
                 return
             }
-            New-Item -ItemType Directory -Path $script:defaultRoot -Force | Out-Null
-            $script:createdDefault = $true
+            New-Item -ItemType Directory -Path $defaultRoot -Force | Out-Null
+            $createdDefault = $true
 
-            $result = Invoke-Installer -Parameters @{ PackageRoot = $script:package }
+            $result = Invoke-Installer -Parameters @{ PackageRoot = $package }
             $result.ExitCode | Should -Be 0
-            $result.Output | Should -Match ([regex]::Escape((Join-Path $script:defaultRoot 'Plugins')))
-            Test-Path -LiteralPath (Join-Path $script:defaultRoot 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
+            $result.Output | Should -Match ([regex]::Escape((Join-Path $defaultRoot 'Plugins')))
+            Test-Path -LiteralPath (Join-Path $defaultRoot 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
         }
 
         It 'honours the environment override for a portable installation' {
-            $portable = Join-Path $script:root 'XrmToolBox (portable)'
+            $portable = Join-Path $root 'XrmToolBox (portable)'
             New-Item -ItemType Directory -Path $portable -Force | Out-Null
             $env:AUTOMATION_MONITOR_XTB_ROOT = $portable
 
-            $result = Invoke-Installer -Parameters @{ PackageRoot = $script:package }
+            $result = Invoke-Installer -Parameters @{ PackageRoot = $package }
             $result.ExitCode | Should -Be 0
             $result.Output | Should -Match ([regex]::Escape((Join-Path $portable 'Plugins')))
             Test-Path -LiteralPath (Join-Path $portable 'Plugins\AutomationMonitor.Core.dll') | Should -BeTrue
         }
 
         It 'lets -StorageRoot win over the environment for an /overridepath install' {
-            $explicit = Join-Path $script:root 'chosen (by hand)'
+            $explicit = Join-Path $root 'chosen (by hand)'
             New-Item -ItemType Directory -Path $explicit -Force | Out-Null
-            $env:AUTOMATION_MONITOR_XTB_ROOT = (Join-Path $script:root 'ignored')
+            $env:AUTOMATION_MONITOR_XTB_ROOT = (Join-Path $root 'ignored')
 
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $explicit; PackageRoot = $script:package }
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $explicit; PackageRoot = $package }
             $result.ExitCode | Should -Be 0
             Test-Path -LiteralPath (Join-Path $explicit 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
-            Test-Path -LiteralPath (Join-Path $script:root 'ignored') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $root 'ignored') | Should -BeFalse
         }
 
         It 'previews the target with -DryRun and writes nothing' {
-            $target = Join-Path $script:root 'preview (nothing here)'
+            $target = Join-Path $root 'preview (nothing here)'
             New-Item -ItemType Directory -Path $target -Force | Out-Null
 
-            $result = Invoke-Installer -Parameters @{ StorageRoot = $target; PackageRoot = $script:package; DryRun = $true }
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $target; PackageRoot = $package; DryRun = $true }
             $result.ExitCode | Should -Be 0
             $result.Output | Should -Match ([regex]::Escape((Join-Path $target 'Plugins')))
             $result.Output | Should -Match 'dry run'
@@ -450,47 +501,47 @@ Describe 'Automation Monitor installer' {
 
     Context 'Uninstall' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'uninstall'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:plugins = Join-Path $script:storage 'Plugins'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            $null = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package }
-            [System.IO.File]::WriteAllBytes((Join-Path $script:plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
-            $script:result = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package; Uninstall = $true }
+            $root = New-TempRoot -Name 'uninstall'
+            $storage = Join-Path $root 'XrmToolBox'
+            $plugins = Join-Path $storage 'Plugins'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            $null = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package }
+            [System.IO.File]::WriteAllBytes((Join-Path $plugins 'OtherPlugin.dll'), [System.Text.Encoding]::ASCII.GetBytes('OTHER-PLUGIN-BYTES'))
+            $result = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package; Uninstall = $true }
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'removes only this plugin''s assemblies' {
-            $script:result.ExitCode | Should -Be 0
-            Test-Path -LiteralPath (Join-Path $script:plugins 'AutomationMonitor.Core.dll') | Should -BeFalse
-            Test-Path -LiteralPath (Join-Path $script:plugins 'AutomationMonitor.Plugin.dll') | Should -BeFalse
-            Test-Path -LiteralPath (Join-Path $script:plugins 'OtherPlugin.dll') | Should -BeTrue
+            $result.ExitCode | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $plugins 'AutomationMonitor.Core.dll') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $plugins 'AutomationMonitor.Plugin.dll') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $plugins 'OtherPlugin.dll') | Should -BeTrue
         }
 
         It 'does not delete the backups it made' {
-            Test-Path -LiteralPath (Join-Path $script:storage 'PluginBackups\AutomationMonitor') -PathType Container | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $storage 'PluginBackups\AutomationMonitor') -PathType Container | Should -BeTrue
         }
 
         It 'is safe to repeat' {
-            $again = Invoke-Installer -Parameters @{ StorageRoot = $script:storage; PackageRoot = $script:package; Uninstall = $true }
+            $again = Invoke-Installer -Parameters @{ StorageRoot = $storage; PackageRoot = $package; Uninstall = $true }
             $again.ExitCode | Should -Be 0
         }
     }
 
     Context 'Install.cmd entry point (unattended)' {
         BeforeAll {
-            $script:root = New-TempRoot -Name 'cmd'
-            $script:storage = Join-Path $script:root 'XrmToolBox'
-            $script:package = New-TestPackage -Root (Join-Path $script:root 'package')
-            New-Item -ItemType Directory -Path $script:storage -Force | Out-Null
+            $root = New-TempRoot -Name 'cmd'
+            $storage = Join-Path $root 'XrmToolBox'
+            $package = New-TestPackage -Root (Join-Path $root 'package')
+            New-Item -ItemType Directory -Path $storage -Force | Out-Null
         }
 
-        AfterAll { Remove-TempRoot -Root $script:root }
+        AfterAll { Remove-TempRoot -Root $root }
 
         It 'finishes without waiting for a key when AM_NO_PAUSE is set' {
-            $log = Join-Path $script:root 'install.log'
-            $line = '"' + $script:CmdPath + '" -StorageRoot "' + $script:storage + '" -PackageRoot "' + $script:package + '"'
+            $log = Join-Path $root 'install.log'
+            $line = '"' + $CmdPath + '" -StorageRoot "' + $storage + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
                 $proc = Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $line) -PassThru -WindowStyle Hidden -RedirectStandardOutput $log
@@ -500,7 +551,7 @@ Describe 'Automation Monitor installer' {
                 }
                 $proc.ExitCode | Should -Be 0
                 (Get-Content -LiteralPath $log -Raw) | Should -Match 'installed Automation Monitor'
-                Test-Path -LiteralPath (Join-Path $script:storage 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
+                Test-Path -LiteralPath (Join-Path $storage 'Plugins\AutomationMonitor.Plugin.dll') | Should -BeTrue
             }
             finally {
                 $env:AM_NO_PAUSE = $null
@@ -508,9 +559,9 @@ Describe 'Automation Monitor installer' {
         }
 
         It 'propagates the failure exit code without blocking' {
-            $log = Join-Path $script:root 'failed.log'
-            $missing = Join-Path $script:root 'not installed (yet)'
-            $line = '"' + $script:CmdPath + '" -StorageRoot "' + $missing + '" -PackageRoot "' + $script:package + '"'
+            $log = Join-Path $root 'failed.log'
+            $missing = Join-Path $root 'not installed (yet)'
+            $line = '"' + $CmdPath + '" -StorageRoot "' + $missing + '" -PackageRoot "' + $package + '"'
             $env:AM_NO_PAUSE = '1'
             try {
                 $proc = Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $line) -PassThru -WindowStyle Hidden -RedirectStandardOutput $log

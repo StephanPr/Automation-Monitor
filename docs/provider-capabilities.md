@@ -2,7 +2,7 @@
 
 What each source really supports, how current its data is, and what still has to be confirmed
 against a live environment. Every claim below names its evidence. Product behaviour lives in
-`docs/specification.md`; the delivery order in `docs/development-plan.md`.
+`docs/specification.md`; packaging, installers, CI and releases in `docs/distribution.md`.
 
 ## Dataverse / Power Automate (solution-aware cloud flow discovery) — M1
 
@@ -55,5 +55,6 @@ against a live environment. Every claim below names its evidence. Product behavi
 ## Power Automate run history, Logic Apps, APIM — not implemented
 
 No run-history, Logic Apps or APIM endpoint is called yet. Their capability, freshness and
-retention questions are recorded in `docs/development-plan.md` and must be answered by a spike
-here before the corresponding milestone is implemented.
+retention questions must each be answered by a spike recorded in this file before the
+corresponding milestone is implemented: an unverified capability is disabled in the UI and
+labelled, never presented as an empty grid.

@@ -1,9 +1,8 @@
 # Distribution: how the Windows package is built, checked and shipped
 
 Audience: whoever builds, publishes or troubleshoots a downloadable build of the
-plugin. Product behaviour is in `specification.md`, delivery order in
-`development-plan.md`, and what each provider really supports in
-`provider-capabilities.md`. This file owns packaging, installers, CI and releases.
+plugin. Product behaviour is in `specification.md`, and what each provider really
+supports is in `provider-capabilities.md`. This file owns packaging, installers, CI and releases.
 
 Scope of this milestone: **distribution only**. It adds no monitoring capability; the
 feature set of a packaged build is whatever `main` implements at that commit.

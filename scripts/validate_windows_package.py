@@ -49,6 +49,102 @@ FORBIDDEN_NAME_PATTERNS = (
 ZIP_NAME_RE = re.compile(r"^AutomationMonitor-v(.+)-win\.zip$")
 EXPECTED_PLUGIN_DIR = "plugin/"
 
+# The installer's own function set, read from packaging/Install.ps1. Deleting a complete
+# function leaves every bracket count balanced, so structure alone cannot prove the script
+# is still whole; the names have to be asserted.
+REQUIRED_INSTALLER_FUNCTIONS = (
+    "Write-Info",
+    "Stop-WithError",
+    "Get-StorageRoot",
+    "Read-Manifest",
+    "Test-PackagePayload",
+    "Test-HostNotRunning",
+    "New-BackupOfExisting",
+    "Install-Payload",
+    "Uninstall-Payload",
+    "Invoke-AutomationMonitorInstall",
+)
+
+
+def _skip_string_literal(text: str, start: int) -> int:
+    """Index just past the PowerShell string literal opening at `start`, or -1 if unterminated."""
+    quote = text[start]
+    i, n = start + 1, len(text)
+    while i < n:
+        if quote == "'":
+            if text[i] == "'":
+                # '' is an escaped quote inside a single-quoted literal, not a terminator.
+                if i + 1 < n and text[i + 1] == "'":
+                    i += 2
+                    continue
+                return i + 1
+        elif text[i] == "`":
+            i += 2
+            continue
+        elif text[i] == '"':
+            if i + 1 < n and text[i + 1] == '"':
+                # "" is an escaped quote inside a double-quoted literal.
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    return -1
+
+
+def scan_powershell_structure(text: str) -> dict:
+    """Count brackets in executable structure only, and report unterminated constructs.
+
+    Comments (# and <# #>) and string literals are skipped: a brace inside a message is not
+    part of the script's structure, so counting it can just as easily hide real damage as
+    invent false damage. Parentheses and brackets are covered alongside braces because
+    truncation does not confine itself to one kind.
+    """
+    counts = {"{": 0, "(": 0, "[": 0}
+    closers = {"}": "{", ")": "(", "]": "["}
+    problems = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("<#", i):
+            # Tested before the "#" branch on purpose: parsing a block comment's body as code
+            # lets an apostrophe inside it open a string that swallows later real closers.
+            end = text.find("#>", i + 2)
+            if end < 0:
+                problems.append("unterminated block comment")
+                break
+            i = end + 2
+            continue
+        if ch == "#":
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if ch in ("'", '"'):
+            end = _skip_string_literal(text, i)
+            if end < 0:
+                problems.append("unterminated %s string" % ("single-quoted" if ch == "'" else "double-quoted"))
+                break
+            i = end
+            continue
+        if ch in counts:
+            counts[ch] += 1
+        elif ch in closers:
+            counts[closers[ch]] -= 1
+            if counts[closers[ch]] < 0:
+                problems.append("unexpected %r" % ch)
+                counts[closers[ch]] = 0
+        i += 1
+    return {"braces": counts["{"], "parens": counts["("], "brackets": counts["["], "problems": problems}
+
+
+def describe_structure(structure: dict) -> str:
+    parts = [
+        "braces=%+d" % structure["braces"],
+        "parens=%+d" % structure["parens"],
+        "brackets=%+d" % structure["brackets"],
+    ]
+    parts.extend(structure["problems"])
+    return ", ".join(parts)
+
 
 class Reporter:
     """Collects check results. Nothing is printed unless the caller asks, so the
@@ -181,10 +277,28 @@ def check_assets(rep: Reporter, archive: zipfile.ZipFile, zip_version: str) -> N
     rep.check(ps1.replace("\r\n", "\n").startswith("#Requires -Version 5"), "install-ps1-requires-5.1", "must target Windows PowerShell 5.1 explicitly")
     for token in ("param(", "StorageRoot", "Unblock-File", "[AutomationMonitor.Install]", "backup", "PACKAGE_HASH_MISMATCH"):
         rep.check(token.lower() in ps1.lower(), "install-ps1-has:%s" % token, "expected behaviour marker missing")
-    # A brace imbalance means the shipped script was truncated or mis-edited; it would
-    # fail to parse on the customer's machine, and no token search would notice.
-    rep.check(ps1.count("{") == ps1.count("}"), "install-ps1-braces-balanced", "script body is truncated or malformed")
-    rep.check(ps1.lower().count("function ") >= 6, "install-ps1-function-count", "installer functions are missing")
+    # A brace imbalance means the shipped script was truncated or mis-edited; it would fail
+    # to parse on the customer's machine and no token search would notice. The scan ignores
+    # comments and string literals, and covers parentheses and brackets as well as braces.
+    structure = scan_powershell_structure(ps1)
+    rep.check(
+        structure["braces"] == 0 and not structure["problems"],
+        "install-ps1-braces-balanced",
+        "script body is truncated or malformed: %s" % describe_structure(structure),
+    )
+    rep.check(
+        structure["parens"] == 0 and structure["brackets"] == 0,
+        "install-ps1-structure-balanced",
+        "unbalanced parentheses or brackets: %s" % describe_structure(structure),
+    )
+    rep.check(
+        ps1.lower().count("function ") >= len(REQUIRED_INSTALLER_FUNCTIONS),
+        "install-ps1-function-count",
+        "installer functions are missing",
+    )
+    # The count above cannot see a deletion that stays balanced, so the names are asserted.
+    missing = [name for name in REQUIRED_INSTALLER_FUNCTIONS if not re.search(r"(?im)^\s*function\s+%s\b" % re.escape(name), ps1)]
+    rep.check(not missing, "install-ps1-functions-named", "missing installer functions: %s" % ", ".join(missing))
     for forbidden in ("pwsh", "Set-ExecutionPolicy"):
         rep.check(forbidden.lower() not in ps1.lower(), "install-ps1-no:%s" % forbidden, "must not appear")
 

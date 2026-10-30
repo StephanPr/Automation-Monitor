@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -288,6 +289,68 @@ class ValidatorTests(unittest.TestCase):
             any(code.startswith("install-ps1-has:PACKAGE_HASH_MISMATCH") for code in codes),
             codes,
         )
+
+    def test_deleting_a_whole_function_is_caught(self):
+        """A complete function can be removed with every bracket still balanced.
+
+        Cutting one function from the first line of the next leaves the structure clean, so
+        only asserting the installer's named set can prove the script is still whole.
+        """
+        data = read_entry(self.zip_path, "Install.ps1").decode("utf-8")
+        starts = [m.start() for m in re.finditer(r"(?m)^function ", data)]
+        self.assertGreaterEqual(len(starts), len(validate_windows_package.REQUIRED_INSTALLER_FUNCTIONS))
+        damaged = data[: starts[-2]] + data[starts[-1] :]
+        rewrite_zip(self.zip_path, replace={"Install.ps1": damaged.encode("utf-8")})
+        codes = self.failures()
+        self.assertIn("install-ps1-functions-named", codes)
+        self.assertNotIn("install-ps1-braces-balanced", codes)
+        self.assertNotIn("install-ps1-structure-balanced", codes)
+
+    def test_unbalanced_parenthesis_in_the_installer_is_caught(self):
+        """Brace counting alone is blind to this; the structural check is not."""
+        data = read_entry(self.zip_path, "Install.ps1").decode("utf-8")
+        rewrite_zip(self.zip_path, replace={"Install.ps1": (data + "\r\nWrite-Info (Get-Date\r\n").encode("utf-8")})
+        codes = self.failures()
+        self.assertIn("install-ps1-structure-balanced", codes)
+        self.assertNotIn("install-ps1-braces-balanced", codes)
+
+
+class PowerShellStructureTests(unittest.TestCase):
+    """The validator judges script structure, not punctuation inside messages."""
+
+    def scan(self, text):
+        return validate_windows_package.scan_powershell_structure(text)
+
+    def test_balanced_script_scans_clean(self):
+        self.assertEqual(
+            self.scan('function f { param($x) if ($x) { Write-Info "ok [$x]" } }'),
+            {"braces": 0, "parens": 0, "brackets": 0, "problems": []},
+        )
+
+    def test_brace_inside_a_message_is_not_structure(self):
+        # The old whole-file character count rejected this perfectly good script.
+        result = self.scan('Write-Info "opening { brace in a message"')
+        self.assertEqual(result["braces"], 0)
+        self.assertEqual(result["problems"], [])
+
+    def test_block_comment_body_is_not_code(self):
+        # An apostrophe in a block comment used to open a phantom string that then swallowed
+        # later real closers, so the scan had to ignore block comments entirely.
+        result = self.scan("<# don't touch this ( note #>\nfunction f { Write-Info 'x' }\n")
+        self.assertEqual(result, {"braces": 0, "parens": 0, "brackets": 0, "problems": []})
+
+    def test_doubled_quotes_are_escapes_not_terminators(self):
+        result = self.scan("$x = 'don''t { break'\n")
+        self.assertEqual(result, {"braces": 0, "parens": 0, "brackets": 0, "problems": []})
+
+    def test_unbalanced_parenthesis_is_reported(self):
+        self.assertEqual(self.scan("Write-Info (Get-Date\n")["parens"], 1)
+
+    def test_unexpected_closer_is_reported(self):
+        self.assertTrue(self.scan("}\nfunction f { }\n")["problems"])
+
+    def test_unterminated_string_is_reported(self):
+        self.assertTrue(self.scan('Write-Info "oops\nfunction f { }\n')["problems"])
 
 
 

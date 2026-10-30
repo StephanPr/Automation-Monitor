@@ -129,8 +129,9 @@ installer test means no release exists, not a release with a warning.
 | Layer | Evidence | Where |
 |---|---|---|
 | Core behaviour | 133 xUnit tests + smoke `PASS:` | Linux and Ubuntu CI |
-| Packaging rules | 39 Python tests (packager, validator, release gate) | Linux and Ubuntu CI |
-| Archive integrity, layout, no host/debug files, manifest self-consistency | 63 validator checks on the real zip | Linux and both CI runners |
+| Packaging rules | 48 Python tests (packager, validator, release gate) | Linux and Ubuntu CI |
+| Archive integrity, layout, no host/debug files, manifest self-consistency | 65 validator checks on the real zip | Linux and both CI runners |
+| Shipped `Install.ps1` is structurally whole | comment/string-aware brace, parenthesis and bracket scan plus the installer's named function set | Linux and both CI runners |
 | `net48` compile of the plugin | `0 Warning(s) 0 Error(s)` | Linux (cross-compile) and Windows CI |
 | Build output equals the distribution set | CI step that fails on any unexpected assembly | Windows CI |
 | Assembly name/version identity | `[AssemblyName]::GetAssemblyName` assertions | Windows CI only |

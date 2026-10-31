@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using AutomationMonitor.Core.Models;
 using AutomationMonitor.Core.Providers.Dataverse;
@@ -21,7 +22,7 @@ namespace AutomationMonitor.Plugin.Connectivity
     /// Exceptions deliberately propagate: the core reader classifies them into an honest state.
     /// </para>
     /// </summary>
-    public sealed class DataverseGateway : IDataverseRowSource
+    public sealed class DataverseGateway : IDataverseRowSource, IDataverseRunRowSource
     {
         private readonly IOrganizationService service;
 
@@ -157,11 +158,98 @@ namespace AutomationMonitor.Plugin.Connectivity
             return new Page<RawWorkflowRecord>(records, rows.MoreRecords, rows.PagingCookie);
         }
 
+        /// <summary>
+        /// One page of <c>flowrun</c> rows for the criteria's flow and window.
+        ///
+        /// <para>
+        /// The window is sent wider than the request on purpose (see
+        /// <see cref="RunQueryCriteria.ServerFromUtc"/>): the column's <c>UserLocal</c> behaviour
+        /// means a bound expressed in UTC may be interpreted in another zone, and a server that
+        /// quietly narrows the read would hide runs. The core re-applies the exact half-open window
+        /// afterwards, so a widened read costs a few discarded rows while a narrowed read would cost
+        /// the truth.
+        /// </para>
+        /// <para>
+        /// Sorting and paging on an Elastic table are the two facts here that a real tenant has to
+        /// confirm; the query is deliberately the same shape discovery already uses, and the core
+        /// re-orders rows by start time regardless.
+        /// </para>
+        /// </summary>
+        public Page<RawRunRecord>? ReadFlowRuns(RunQueryCriteria criteria, PageRequest request, CancellationToken cancellationToken)
+        {
+            if (criteria == null)
+            {
+                throw new ArgumentNullException(nameof(criteria));
+            }
+
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            QueryExpression query = new QueryExpression(DataverseSchema.RunEntity);
+            query.ColumnSet = new ColumnSet(DataverseSchema.RunAttributes);
+
+            // The workflow filter is what keeps this a per-flow read; the Elastic partition is the
+            // current user, so an unbounded run query would pull every flow that user can see.
+            query.Criteria = new FilterExpression(LogicalOperator.And);
+            query.Criteria.AddCondition(DataverseSchema.RunWorkflowId, ConditionOperator.Equal, criteria.Workflow.WorkflowId);
+            query.Criteria.AddCondition(DataverseSchema.RunStartTime, ConditionOperator.OnOrAfter, criteria.ServerFromUtc.UtcDateTime);
+            query.Criteria.AddCondition(DataverseSchema.RunStartTime, ConditionOperator.OnOrBefore, criteria.ServerToUtc.UtcDateTime);
+
+            if (criteria.StatusValues.Count > 0)
+            {
+                FilterExpression statuses = new FilterExpression(LogicalOperator.Or);
+                for (int i = 0; i < criteria.StatusValues.Count; i++)
+                {
+                    statuses.AddCondition(DataverseSchema.RunStatus, ConditionOperator.Equal, criteria.StatusValues[i]);
+                }
+
+                query.Criteria.AddFilter(statuses);
+            }
+
+            query.AddOrder(DataverseSchema.RunStartTime, OrderType.Descending);
+            ApplyPaging(query, request, criteria.PageSize);
+
+            EntityCollection rows = service.RetrieveMultiple(query);
+            List<RawRunRecord> records = new List<RawRunRecord>();
+            foreach (Entity entity in rows.Entities)
+            {
+                Guid rowId = entity.Id;
+                records.Add(new RawRunRecord
+                {
+                    RunRecordId = rowId == Guid.Empty ? null : rowId.ToString("D"),
+                    RunId = GetString(entity, DataverseSchema.RunName),
+                    WorkflowId = GetString(entity, DataverseSchema.RunWorkflowId),
+                    RawStatus = GetString(entity, DataverseSchema.RunStatus),
+                    StartedAtUtc = GetUtc(entity, DataverseSchema.RunStartTime),
+                    EndedAtUtc = GetUtc(entity, DataverseSchema.RunEndTime),
+                    ReportedDurationMs = GetLong(entity, DataverseSchema.RunDuration),
+                    ErrorCode = GetString(entity, DataverseSchema.RunErrorCode),
+                    ErrorText = GetString(entity, DataverseSchema.RunErrorMessage),
+                    ParentRunId = GetString(entity, DataverseSchema.RunParentRunId),
+                    CorrelationId = GetString(entity, DataverseSchema.RunClientTrackingId),
+                    PrimaryRunCode = GetInt(entity, DataverseSchema.RunIsPrimary),
+                    PrimaryRunFlag = GetBool(entity, DataverseSchema.RunIsPrimary),
+                    TriggerType = GetString(entity, DataverseSchema.RunTriggerType)
+                });
+            }
+
+            return new Page<RawRunRecord>(records, rows.MoreRecords, rows.PagingCookie);
+        }
+
         private static void ApplyPaging(QueryExpression query, PageRequest request)
+        {
+            ApplyPaging(query, request, PageReader.DefaultPageSize);
+        }
+
+        private static void ApplyPaging(QueryExpression query, PageRequest request, int count)
         {
             query.PageInfo = new PagingInfo
             {
-                Count = PageReader.DefaultPageSize,
+                Count = count,
                 PageNumber = request.PageNumber
             };
 
@@ -217,13 +305,55 @@ namespace AutomationMonitor.Plugin.Connectivity
         private static DateTimeOffset? GetUtc(Entity entity, string attribute)
         {
             object? raw = Unwrap(entity, attribute);
-            if (!(raw is DateTime))
+            if (raw is DateTime)
             {
-                return null;
+                // Dataverse persists these instants in UTC and hands them back with Kind Unspecified.
+                return new DateTimeOffset(DateTime.SpecifyKind((DateTime)raw, DateTimeKind.Utc));
             }
 
-            // Dataverse persists these instants in UTC and hands them back with Kind Unspecified.
-            return new DateTimeOffset(DateTime.SpecifyKind((DateTime)raw, DateTimeKind.Utc));
+            if (raw is DateTimeOffset)
+            {
+                // A reader that already resolved the offset is normalised to UTC, not trusted as local.
+                return new DateTimeOffset(((DateTimeOffset)raw).ToUniversalTime().UtcDateTime, TimeSpan.Zero);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// BigInt reader. Dataverse returns a BigInt column as <see cref="long"/>, so an Int32 read
+        /// would throw on a long-running flow; the value stays milliseconds because the column
+        /// (schema name <c>DurationInMs</c>) is milliseconds.
+        /// </summary>
+        private static long? GetLong(Entity entity, string attribute)
+        {
+            object? raw = Unwrap(entity, attribute);
+            if (raw is long)
+            {
+                return (long)raw;
+            }
+
+            if (raw is int)
+            {
+                return (int)raw;
+            }
+
+            if (raw is decimal)
+            {
+                return (long)(decimal)raw;
+            }
+
+            string? text = raw as string;
+            if (text != null)
+            {
+                long parsed;
+                if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            return null;
         }
 
         private static object? Unwrap(Entity entity, string attribute)

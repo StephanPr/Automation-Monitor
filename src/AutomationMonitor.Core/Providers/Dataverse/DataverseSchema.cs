@@ -60,5 +60,87 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
         /// <summary>Dataverse statecode for an enabled workflow.</summary>
         public const int StateCodeEnabled = 1;
+
+        // ---- flowrun: execution history (M3) ------------------------------------------------
+        //
+        // Run history for solution-aware cloud flows is replicated into this table. Every fact
+        // below comes from the Microsoft Learn FlowRun entity reference and is repeated in
+        // docs/provider-capabilities.md; none of it has been executed against a tenant from this
+        // host, so the run provider ships behind the spike checklist until the first Windows
+        // session confirms it.
+
+        /// <summary>Entity holding one row per solution-aware cloud flow execution.</summary>
+        public const string RunEntity = "flowrun";
+
+        /// <summary>Primary id of the row (Uniqueidentifier). Not the Logic Apps run id.</summary>
+        public const string RunFlowRunId = "flowrunid";
+
+        /// <summary>
+        /// Primary name attribute (String 100): the Logic Apps run name of the execution. This is
+        /// the value <c>parentrunid</c> refers to, so it is the run id the model keys on.
+        /// </summary>
+        public const string RunName = "name";
+
+        /// <summary>Cloud flow this execution belongs to (String 100), matched to <see cref="WorkflowId"/>.</summary>
+        public const string RunWorkflowId = "workflowid";
+
+        /// <summary>Start instant (DateTime, UserLocal behaviour: read as the UTC Dataverse stores).</summary>
+        public const string RunStartTime = "starttime";
+
+        /// <summary>End instant; absent while the run is still going.</summary>
+        public const string RunEndTime = "endtime";
+
+        /// <summary>BigInt duration in milliseconds. The Learn property page calls it DurationInMs.</summary>
+        public const string RunDuration = "duration";
+
+        /// <summary>Free-text provider status (String 100, RequiredLevel None): absent is possible.</summary>
+        public const string RunStatus = "status";
+
+        /// <summary>Short error code (String 100).</summary>
+        public const string RunErrorCode = "errorcode";
+
+        /// <summary>Error description (Memo 20000). Untrusted text: never a payload, always truncated.</summary>
+        public const string RunErrorMessage = "errormessage";
+
+        /// <summary>Parent run name (String 100): the execution evidence for a parent/child link.</summary>
+        public const string RunParentRunId = "parentrunid";
+
+        /// <summary>Tracking id propagated by the caller (String 255): correlation on evidence only.</summary>
+        public const string RunClientTrackingId = "clienttrackingid";
+
+        /// <summary>Primary-run marker. A <c>Picklist</c>, not a Boolean: read it type-tolerantly.</summary>
+        public const string RunIsPrimary = "isprimary";
+
+        /// <summary>Trigger kind as text (String 100).</summary>
+        public const string RunTriggerType = "triggertype";
+
+        /// <summary>Picklist value of <see cref="RunIsPrimary"/> meaning "not the primary run".</summary>
+        public const int IsPrimaryValueFalse = 0;
+
+        /// <summary>Picklist value of <see cref="RunIsPrimary"/> meaning "the primary run".</summary>
+        public const int IsPrimaryValueTrue = 1;
+
+        /// <summary>
+        /// The columns the run provider asks the source for, in the order the gateway builds them.
+        /// A guard test pins this list against <see cref="RunAttributeCount"/>: a column added here
+        /// and forgotten in the query (or the reverse) would otherwise mean a silently missing
+        /// value on every row.
+        /// </summary>
+        public static readonly string[] RunAttributes =
+        {
+            RunFlowRunId,
+            RunName,
+            RunWorkflowId,
+            RunStartTime,
+            RunEndTime,
+            RunDuration,
+            RunStatus,
+            RunErrorCode,
+            RunErrorMessage,
+            RunParentRunId,
+            RunClientTrackingId,
+            RunIsPrimary,
+            RunTriggerType
+        };
     }
 }

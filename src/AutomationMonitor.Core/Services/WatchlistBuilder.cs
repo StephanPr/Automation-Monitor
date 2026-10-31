@@ -149,21 +149,7 @@ namespace AutomationMonitor.Core.Services
         /// <summary>How far a state is from "everything was read", for combining two sources.</summary>
         private static int Severity(ProviderResultState state)
         {
-            switch (state)
-            {
-                case ProviderResultState.Complete:
-                    return 0;
-                case ProviderResultState.Stale:
-                    return 1;
-                case ProviderResultState.Partial:
-                    return 2;
-                case ProviderResultState.Unsupported:
-                    return 3;
-                case ProviderResultState.Unauthorized:
-                    return 4;
-                default:
-                    return 5;
-            }
+            return ProviderResultStates.Severity(state);
         }
 
         private bool Merge(WorkflowReference flow, WatchlistMemberSource source, IEnumerable<string>? solutionIds)

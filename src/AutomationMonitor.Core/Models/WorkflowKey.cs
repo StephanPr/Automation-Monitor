@@ -12,8 +12,8 @@ namespace AutomationMonitor.Core.Models
         private WorkflowKey(ProviderKind provider, string? scopeId, string workflowId)
         {
             Provider = provider;
-            ScopeId = NormalizeText(scopeId);
-            WorkflowId = NormalizeId(workflowId);
+            ScopeId = CanonicalId.Text(scopeId);
+            WorkflowId = CanonicalId.Identifier(workflowId);
         }
 
         public ProviderKind Provider { get; }
@@ -88,26 +88,6 @@ namespace AutomationMonitor.Core.Models
         {
             return Canonical;
         }
-
-        private static string NormalizeText(string? value)
-        {
-            return string.IsNullOrEmpty(value) ? string.Empty : value!.Trim().ToLowerInvariant();
-        }
-
-        /// <summary>
-        /// Ids arrive as GUIDs in different formats (with or without dashes) depending on the
-        /// reader. Canonicalising them keeps one workflow from appearing twice.
-        /// </summary>
-        private static string NormalizeId(string value)
-        {
-            string text = NormalizeText(value);
-            Guid parsed;
-            if (Guid.TryParse(text, out parsed))
-            {
-                return parsed.ToString("D").ToLowerInvariant();
-            }
-
-            return text;
-        }
     }
 }
+

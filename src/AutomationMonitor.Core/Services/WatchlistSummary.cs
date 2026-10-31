@@ -12,10 +12,19 @@ namespace AutomationMonitor.Core.Services
     /// </summary>
     public static class WatchlistSummary
     {
-        /// <summary>Placeholder shown before the first discovery has produced a watchlist.</summary>
+        /// <summary>
+        /// Placeholder shown when there is no list to describe.
+        ///
+        /// <para>
+        /// Wording change in M4, with the product reason: until now nothing could be written at all, and
+        /// the old sentence said so. Saved watchlists exist from M4 on, so the promise it made would be
+        /// false. What stays true, and what this line still says, is that an unsaved in-memory list is not
+        /// on disk and nothing is being monitored.
+        /// </para>
+        /// </summary>
         public static string Empty
         {
-            get { return "No watchlist built yet. Nothing is written to disk in this milestone."; }
+            get { return "No watchlist selected. Nothing is being monitored, and nothing is saved."; }
         }
 
         public static string Describe(Watchlist? watchlist)
@@ -29,12 +38,18 @@ namespace AutomationMonitor.Core.Services
             text.Append("Watchlist \"").Append(watchlist.Name).Append("\" - ")
                 .Append(watchlist.MonitoredFlowCount.ToString(CultureInfo.InvariantCulture)).Append(" flow(s) monitored of ")
                 .Append(watchlist.Members.Count.ToString(CultureInfo.InvariantCulture)).Append(" member(s) - ")
+                .Append(WatchlistMembershipModes.Describe(watchlist.Mode)).Append(" - ")
                 .Append(SourceStatus.Label(watchlist.State));
 
             if (watchlist.SourceSolutionIds.Count > 0)
             {
                 text.Append(" - from ").Append(watchlist.SourceSolutionIds.Count.ToString(CultureInfo.InvariantCulture)).Append(" solution(s)");
             }
+
+            text.Append(" - membership checked ")
+                .Append(watchlist.LastMembershipRefreshUtc.HasValue
+                    ? watchlist.LastMembershipRefreshUtc.Value.ToUniversalTime().ToString("u", CultureInfo.InvariantCulture)
+                    : "never");
 
             if (!string.IsNullOrWhiteSpace(watchlist.CoverageDescription))
             {

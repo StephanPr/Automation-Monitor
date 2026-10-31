@@ -52,5 +52,67 @@ namespace AutomationMonitor.Core.Models
 
             return worst;
         }
+
+        /// <summary>
+        /// Stored form of a coverage state. A watchlist keeps the coverage of the discovery that
+        /// filled it, so the vocabulary has to survive a round-trip through a file: a list saved as
+        /// partial must still read as partial, or a stale statement becomes a promise.
+        /// </summary>
+        public static string Token(ProviderResultState state)
+        {
+            switch (state)
+            {
+                case ProviderResultState.Complete:
+                    return "complete";
+                case ProviderResultState.Partial:
+                    return "partial";
+                case ProviderResultState.Unauthorized:
+                    return "unauthorized";
+                case ProviderResultState.Unavailable:
+                    return "unavailable";
+                case ProviderResultState.Unsupported:
+                    return "unsupported";
+                default:
+                    return "stale";
+            }
+        }
+
+        /// <summary>
+        /// Read a stored coverage state. An unrecognised token returns false and
+        /// <see cref="ProviderResultState.Unavailable"/>: the caller must report that the file said
+        /// something this build cannot understand, and the safe reading of an unknown coverage claim
+        /// is "it was not fully read", never "it was complete".
+        /// </summary>
+        public static bool TryParse(string? token, out ProviderResultState state)
+        {
+            state = ProviderResultState.Unavailable;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return false;
+            }
+
+            switch (token!.Trim().ToLowerInvariant())
+            {
+                case "complete":
+                    state = ProviderResultState.Complete;
+                    return true;
+                case "partial":
+                    state = ProviderResultState.Partial;
+                    return true;
+                case "unauthorized":
+                    state = ProviderResultState.Unauthorized;
+                    return true;
+                case "unsupported":
+                    state = ProviderResultState.Unsupported;
+                    return true;
+                case "stale":
+                    state = ProviderResultState.Stale;
+                    return true;
+                case "unavailable":
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 }

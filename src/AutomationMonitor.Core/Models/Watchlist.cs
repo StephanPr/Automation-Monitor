@@ -4,9 +4,9 @@ using System.Collections.Generic;
 namespace AutomationMonitor.Core.Models
 {
     /// <summary>
-    /// How membership is decided. Only <see cref="Snapshot"/> is produced by this milestone;
-    /// <see cref="DynamicSolution"/> exists so the shape does not change when M4 adds
-    /// reconciliation, and so persistence is never inferred from an in-memory object.
+    /// How membership is decided. The mode is a stored fact, never inferred: a saved watchlist has
+    /// to say whether its membership is owned by the operator or follows a solution, because that
+    /// single value decides whether a refresh may add or remove anything at all.
     /// </summary>
     public enum WatchlistMembershipMode
     {
@@ -14,7 +14,14 @@ namespace AutomationMonitor.Core.Models
         Snapshot = 0,
 
         /// <summary>Membership follows the source solution and is reconciled on explicit refresh.</summary>
-        DynamicSolution = 1
+        DynamicSolution = 1,
+
+        /// <summary>
+        /// Built and owned by hand: no discovery pass may add or remove a member. Distinct from
+        /// <see cref="Snapshot"/> because a snapshot remembers the solution it came from and can be
+        /// re-imported from it, while a manual list has no source to reconcile against.
+        /// </summary>
+        Manual = 2
     }
 
     /// <summary>Why a workflow is in the watchlist. Combinable: a flow can come from both.</summary>
@@ -37,7 +44,9 @@ namespace AutomationMonitor.Core.Models
             WorkflowReference workflow,
             WatchlistMemberSource source,
             IEnumerable<string>? sourceSolutionIds,
-            bool isIncluded)
+            bool isIncluded,
+            DateTimeOffset? addedAtUtc = null,
+            DateTimeOffset? lastSeenUtc = null)
         {
             if (workflow == null)
             {
@@ -60,6 +69,8 @@ namespace AutomationMonitor.Core.Models
 
             SourceSolutionIds = ids;
             IsIncluded = isIncluded;
+            AddedAtUtc = addedAtUtc;
+            LastSeenUtc = lastSeenUtc;
         }
 
         public WorkflowReference Workflow { get; }
@@ -73,11 +84,67 @@ namespace AutomationMonitor.Core.Models
 
         /// <summary>False means the operator excluded this flow; it stays visible, not deleted.</summary>
         public bool IsIncluded { get; }
+
+        /// <summary>When this flow entered the watchlist. UTC; null for a member a pre-M4 build made.</summary>
+        public DateTimeOffset? AddedAtUtc { get; }
+
+        /// <summary>
+        /// When a discovery pass last actually found this flow. Null means "never observed", which is
+        /// how a manually added or currently unreachable member stays distinguishable from a flow
+        /// that was seen and then removed from its solution.
+        /// </summary>
+        public DateTimeOffset? LastSeenUtc { get; }
+
+        /// <summary>Apply the operator's include/exclude decision, keeping provenance and timestamps.</summary>
+        public WatchlistMember WithInclusion(bool isIncluded)
+        {
+            return new WatchlistMember(Workflow, Source, SourceSolutionIds, isIncluded, AddedAtUtc, LastSeenUtc);
+        }
+
+        /// <summary>
+        /// Record what a discovery pass saw: more solution provenance and a fresh observation time.
+        /// Inclusion is deliberately not touched - discovery never silently re-includes a flow the
+        /// operator excluded.
+        /// </summary>
+        public WatchlistMember WithObservation(WatchlistMemberSource addedSource, IEnumerable<string>? solutionIds, DateTimeOffset seenAtUtc)
+        {
+            List<string> ids = new List<string>(SourceSolutionIds);
+            if (solutionIds != null)
+            {
+                foreach (string id in solutionIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(id) && !ids.Contains(id))
+                    {
+                        ids.Add(id);
+                    }
+                }
+            }
+
+            return new WatchlistMember(Workflow, Source | addedSource, ids, IsIncluded, AddedAtUtc, seenAtUtc.ToUniversalTime());
+        }
+
+        /// <summary>Refresh the display record when a re-read finds the same identity again.</summary>
+        public WatchlistMember WithWorkflow(WorkflowReference workflow)
+        {
+            if (workflow == null)
+            {
+                throw new ArgumentNullException(nameof(workflow));
+            }
+
+            return new WatchlistMember(workflow, Source, SourceSolutionIds, IsIncluded, AddedAtUtc, LastSeenUtc);
+        }
+
+        public override string ToString()
+        {
+            return Workflow.Name + (IsIncluded ? string.Empty : " (excluded)");
+        }
     }
 
     /// <summary>
-    /// An in-memory set of workflows to monitor. Deliberately has no file, repository or
-    /// persistence behaviour: saved watchlists are M4 and will serialize this shape.
+    /// A set of workflows to monitor, with the provenance and intent that decided each member.
+    /// The model itself stays free of file and serialisation behaviour: <c>Persistence/</c> maps it
+    /// to explicit data-contract DTOs, so the shape the operator sees can never drift into the
+    /// shape written to disk.
     /// </summary>
     public sealed class Watchlist
     {
@@ -88,12 +155,24 @@ namespace AutomationMonitor.Core.Models
             IEnumerable<string>? sourceSolutionIds,
             IEnumerable<WatchlistMember>? members,
             ProviderResultState state,
-            IEnumerable<string>? coverageNotes)
+            IEnumerable<string>? coverageNotes,
+            string? description = null,
+            string? environmentId = null,
+            DateTimeOffset? createdAtUtc = null,
+            DateTimeOffset? modifiedAtUtc = null,
+            DateTimeOffset? lastMembershipRefreshUtc = null,
+            WatchlistPreferences? preferences = null)
         {
             Id = id;
             Name = name;
             Mode = mode;
             State = state;
+            Description = (description ?? string.Empty).Trim();
+            EnvironmentId = (environmentId ?? string.Empty).Trim();
+            CreatedAtUtc = createdAtUtc;
+            ModifiedAtUtc = modifiedAtUtc;
+            LastMembershipRefreshUtc = lastMembershipRefreshUtc;
+            Preferences = preferences ?? WatchlistPreferences.Inherited;
             List<string> ids = new List<string>();
             if (sourceSolutionIds != null)
             {
@@ -127,14 +206,52 @@ namespace AutomationMonitor.Core.Models
             }
 
             CoverageNotes = notes;
+
+            List<string> excluded = new List<string>();
+            foreach (WatchlistMember member in list)
+            {
+                if (!member.IsIncluded && !excluded.Contains(member.Key.Canonical))
+                {
+                    excluded.Add(member.Key.Canonical);
+                }
+            }
+
+            ExcludedWorkflowKeys = excluded;
         }
 
-        /// <summary>In-memory identity. Not persisted and not derived from the name.</summary>
+        /// <summary>Stored identity. Never derived from the name and never re-generated on rename.</summary>
         public string Id { get; }
 
         public string Name { get; }
 
         public WatchlistMembershipMode Mode { get; }
+
+        /// <summary>Operator note stored with the list. Never part of identity or uniqueness.</summary>
+        public string Description { get; }
+
+        /// <summary>
+        /// Environment this list belongs to, or empty when it was built without one. A saved list
+        /// that names an environment is never offered as the active list of another.
+        /// </summary>
+        public string EnvironmentId { get; }
+
+        /// <summary>When the list was created. UTC; null only for a list built in memory and never saved.</summary>
+        public DateTimeOffset? CreatedAtUtc { get; }
+
+        /// <summary>When the stored content last changed. UTC. A caller may compare it to detect a conflict.</summary>
+        public DateTimeOffset? ModifiedAtUtc { get; }
+
+        /// <summary>When membership was last reconciled against its source solution(s); null when never.</summary>
+        public DateTimeOffset? LastMembershipRefreshUtc { get; }
+
+        /// <summary>Refresh interval, date range and threshold overrides carried by this list.</summary>
+        public WatchlistPreferences Preferences { get; }
+
+        /// <summary>
+        /// Canonical keys the operator excluded. They stay members of the list, and a dynamic
+        /// refresh may not silently re-include them.
+        /// </summary>
+        public IReadOnlyList<string> ExcludedWorkflowKeys { get; }
 
         /// <summary>Solutions this watchlist was generated from, in the order they were added.</summary>
         public IReadOnlyList<string> SourceSolutionIds { get; }
@@ -207,6 +324,268 @@ namespace AutomationMonitor.Core.Models
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Stored timestamps as one honest line for a grid cell: what was created, what was last
+        /// changed and when membership was last checked against its source. UTC, and "not recorded"
+        /// is stated instead of being faked with a placeholder date.
+        /// </summary>
+        public string TimestampsDescription
+        {
+            get
+            {
+                return "created " + Describe(CreatedAtUtc)
+                    + ", changed " + Describe(ModifiedAtUtc)
+                    + ", membership checked " + Describe(LastMembershipRefreshUtc);
+            }
+        }
+
+        private static string Describe(DateTimeOffset? instantUtc)
+        {
+            return instantUtc.HasValue
+                ? instantUtc.Value.ToUniversalTime().ToString("u", System.Globalization.CultureInfo.InvariantCulture)
+                : "not recorded";
+        }
+
+        /// <summary>
+        /// Copy with one or more parts replaced. A null argument means "keep what this list has",
+        /// which is why clearing something is done with <c>string.Empty</c> or an empty collection
+        /// and never with null: a mutation must not be able to erase a field by accident.
+        /// </summary>
+        private Watchlist Copy(
+            string? name = null,
+            WatchlistMembershipMode? mode = null,
+            string? description = null,
+            string? environmentId = null,
+            WatchlistPreferences? preferences = null,
+            IEnumerable<WatchlistMember>? members = null,
+            ProviderResultState? state = null,
+            IEnumerable<string>? coverageNotes = null,
+            DateTimeOffset? createdUtc = null,
+            DateTimeOffset? modifiedUtc = null,
+            DateTimeOffset? refreshedUtc = null)
+        {
+            return new Watchlist(
+                Id,
+                name ?? Name,
+                mode ?? Mode,
+                SourceSolutionIds,
+                members ?? Members,
+                state ?? State,
+                coverageNotes ?? CoverageNotes,
+                description ?? Description,
+                environmentId ?? EnvironmentId,
+                createdUtc ?? CreatedAtUtc,
+                modifiedUtc ?? ModifiedAtUtc,
+                refreshedUtc ?? LastMembershipRefreshUtc,
+                preferences ?? Preferences);
+        }
+
+        public Watchlist WithName(string name)
+        {
+            return Copy(name: name);
+        }
+
+        public Watchlist WithDescription(string description)
+        {
+            return Copy(description: description ?? string.Empty);
+        }
+
+        public Watchlist WithMode(WatchlistMembershipMode mode)
+        {
+            return Copy(mode: mode);
+        }
+
+        public Watchlist WithEnvironment(string? environmentId)
+        {
+            return Copy(environmentId: environmentId ?? string.Empty);
+        }
+
+        public Watchlist WithPreferences(WatchlistPreferences preferences)
+        {
+            return Copy(preferences: preferences ?? WatchlistPreferences.Inherited);
+        }
+
+        public Watchlist WithMembers(IEnumerable<WatchlistMember> members)
+        {
+            if (members == null)
+            {
+                throw new ArgumentNullException(nameof(members));
+            }
+
+            return Copy(members: members);
+        }
+
+        public Watchlist WithCoverage(ProviderResultState state, IEnumerable<string> coverageNotes)
+        {
+            if (coverageNotes == null)
+            {
+                throw new ArgumentNullException(nameof(coverageNotes));
+            }
+
+            return Copy(state: state, coverageNotes: coverageNotes);
+        }
+
+        /// <summary>Stamp a change: the modification time moves, and creation time is set when unset.</summary>
+        public Watchlist WithModifiedAt(DateTimeOffset touchedUtc)
+        {
+            DateTimeOffset touched = touchedUtc.ToUniversalTime();
+            return Copy(createdUtc: CreatedAtUtc ?? touched, modifiedUtc: touched);
+        }
+
+        /// <summary>Record that membership was reconciled at this instant. UTC.</summary>
+        public Watchlist WithMembershipRefresh(DateTimeOffset refreshedUtc)
+        {
+            return Copy(refreshedUtc: refreshedUtc.ToUniversalTime());
+        }
+    }
+
+    /// <summary>
+    /// Stored form of a <see cref="WatchlistMembershipMode"/>. The token is what decides whether a
+    /// later refresh may add or remove members, so an unrecognised value must be reported and not
+    /// defaulted: guessing "snapshot" for a dynamic list stops it following its solution, guessing
+    /// "dynamic" for a snapshot lets a refresh edit membership the operator owns.
+    /// </summary>
+    public static class WatchlistMembershipModes
+    {
+        public static string Token(WatchlistMembershipMode mode)
+        {
+            switch (mode)
+            {
+                case WatchlistMembershipMode.DynamicSolution:
+                    return "dynamic";
+                case WatchlistMembershipMode.Manual:
+                    return "manual";
+                default:
+                    return "snapshot";
+            }
+        }
+
+        public static bool TryParse(string? token, out WatchlistMembershipMode mode)
+        {
+            mode = WatchlistMembershipMode.Snapshot;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return false;
+            }
+
+            switch (token!.Trim().ToLowerInvariant())
+            {
+                case "snapshot":
+                    return true;
+                case "dynamic":
+                case "dynamicsolution":
+                    mode = WatchlistMembershipMode.DynamicSolution;
+                    return true;
+                case "manual":
+                    mode = WatchlistMembershipMode.Manual;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>What the mode means, in the words an operator sees next to the list.</summary>
+        public static string Describe(WatchlistMembershipMode mode)
+        {
+            switch (mode)
+            {
+                case WatchlistMembershipMode.DynamicSolution:
+                    return "dynamic: membership follows its solution(s) on refresh";
+                case WatchlistMembershipMode.Manual:
+                    return "manual: only you add or remove members";
+                default:
+                    return "snapshot: membership is fixed until you re-import it";
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stored form of <see cref="WatchlistMemberSource"/>. Origins are written as a list of tokens
+    /// rather than a number, so a file stays readable and a new flag cannot silently change what an
+    /// older value means.
+    /// </summary>
+    public static class WatchlistMemberSources
+    {
+        public static IReadOnlyList<string> Tokens(WatchlistMemberSource source)
+        {
+            List<string> tokens = new List<string>();
+            if (source.HasFlag(WatchlistMemberSource.Solution))
+            {
+                tokens.Add("solution");
+            }
+
+            if (source.HasFlag(WatchlistMemberSource.Manual))
+            {
+                tokens.Add("manual");
+            }
+
+            if (tokens.Count == 0)
+            {
+                tokens.Add("unknown");
+            }
+
+            return tokens;
+        }
+
+        /// <summary>
+        /// Read stored origins. An unrecognised token is reported as false while the recognised ones
+        /// are still applied, so one odd entry degrades one member's provenance instead of losing it.
+        /// </summary>
+        public static bool TryParse(IEnumerable<string>? tokens, out WatchlistMemberSource source)
+        {
+            source = WatchlistMemberSource.None;
+            bool recognised = true;
+            if (tokens == null)
+            {
+                return false;
+            }
+
+            foreach (string token in tokens)
+            {
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    continue;
+                }
+
+                switch (token.Trim().ToLowerInvariant())
+                {
+                    case "solution":
+                        source |= WatchlistMemberSource.Solution;
+                        break;
+                    case "manual":
+                        source |= WatchlistMemberSource.Manual;
+                        break;
+                    case "unknown":
+                        break;
+                    default:
+                        recognised = false;
+                        break;
+                }
+            }
+
+            return recognised && source != WatchlistMemberSource.None;
+        }
+
+        public static string Label(WatchlistMemberSource source)
+        {
+            if (source.HasFlag(WatchlistMemberSource.Solution) && source.HasFlag(WatchlistMemberSource.Manual))
+            {
+                return "solution + manual";
+            }
+
+            if (source.HasFlag(WatchlistMemberSource.Solution))
+            {
+                return "solution";
+            }
+
+            if (source.HasFlag(WatchlistMemberSource.Manual))
+            {
+                return "manual";
+            }
+
+            return "unknown origin";
         }
     }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using AutomationMonitor.Core.Abstractions;
 using AutomationMonitor.Core.Models;
+using AutomationMonitor.Core.Persistence;
 using AutomationMonitor.Core.Providers.Dataverse;
 using AutomationMonitor.Core.Services;
 
@@ -213,8 +214,8 @@ internal sealed class FakeRunSource : IWorkflowRunSource
             throw new OperationCanceledException(cancellationToken);
         }
 
-        ProviderResult<IReadOnlyList<WorkflowRun>> canned;
-        if (results.TryGetValue(workflow.Canonical, out canned))
+        ProviderResult<IReadOnlyList<WorkflowRun>>? canned;
+        if (results.TryGetValue(workflow.Canonical, out canned) && canned != null)
         {
             return canned;
         }
@@ -236,6 +237,266 @@ internal sealed class FakeRunSource : IWorkflowRunSource
             default:
                 return ProviderResult<IReadOnlyList<WorkflowRun>>.Unavailable(0, checkedAtUtc, "no canned answer for " + workflow.Canonical + ".");
         }
+    }
+}
+
+/// <summary>
+/// In-memory settings directory behind <see cref="ISettingsFileAccess"/>. The store's atomicity,
+/// backup, rollback and recovery rules are decisions of the core, so they are tested against this fake
+/// rather than against the real file system: every operation is recorded in order, and any operation
+/// can be made to fail the way a read-only directory or a full disk would.
+/// </summary>
+internal sealed class FakeSettingsFiles : ISettingsFileAccess
+{
+    private readonly Dictionary<string, string> _files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    public string DirectoryPath { get; set; } = "/settings/AutomationMonitor";
+
+    public bool HasDirectory { get; set; }
+
+    /// <summary>Ordered log of the primitive operations the store asked for.</summary>
+    public List<string> Operations { get; } = new List<string>();
+
+    public string? FailCreateDirectory { get; set; }
+    public string? FailRead { get; set; }
+    public string? FailWrite { get; set; }
+
+    /// <summary>
+    /// Renames to fail, each named as "source-&gt;target" (see <see cref="MovePair"/>). A real failure is
+    /// always one specific move - a lock on one file, one name the directory will not accept - and the
+    /// store's rollback rules turn on which one broke, so "the backup failed" and "the final move
+    /// failed" must be expressible separately, and both at once for a rollback that fails too.
+    /// </summary>
+    public List<string> FailMoves { get; } = new List<string>();
+
+    public string? FailDelete { get; set; }
+
+    /// <summary>The pair form <see cref="FailMoves"/> matches against.</summary>
+    public static string MovePair(string sourceFileName, string targetFileName)
+    {
+        return sourceFileName + "->" + targetFileName;
+    }
+
+    /// <summary>Simulate a crash mid-write: the pending file exists, the target does not.</summary>
+    public void PlantInterruptedWrite(string fileName, string pendingContent)
+    {
+        HasDirectory = true;
+        _files[SettingsLayout.PendingOf(fileName)] = pendingContent;
+    }
+
+    public bool DirectoryExists()
+    {
+        return HasDirectory;
+    }
+
+    public bool TryCreateDirectory(out string? reason)
+    {
+        Operations.Add("create-directory");
+        reason = FailCreateDirectory;
+        if (reason != null)
+        {
+            return false;
+        }
+
+        HasDirectory = true;
+        return true;
+    }
+
+    public bool FileExists(string fileName)
+    {
+        return HasDirectory && _files.ContainsKey(fileName);
+    }
+
+    public bool TryRead(string fileName, out string? content, out string? reason)
+    {
+        Operations.Add("read:" + fileName);
+        content = null;
+        if (FailRead != null && string.Equals(FailRead, fileName, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "the file is locked";
+            return false;
+        }
+
+        if (!_files.TryGetValue(fileName, out content))
+        {
+            reason = "no such file: " + fileName;
+            content = null;
+            return false;
+        }
+
+        reason = null;
+        return true;
+    }
+
+    public bool TryWrite(string fileName, string content, out string? reason)
+    {
+        Operations.Add("write:" + fileName);
+        if (FailWrite != null && string.Equals(FailWrite, fileName, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "the disk is full";
+            return false;
+        }
+
+        _files[fileName] = content;
+        reason = null;
+        return true;
+    }
+
+    public bool TryMove(string sourceFileName, string targetFileName, out string? reason)
+    {
+        Operations.Add("move:" + sourceFileName + "->" + targetFileName);
+        if (FailMoves.Contains(MovePair(sourceFileName, targetFileName)))
+        {
+            reason = "the file is in use";
+            return false;
+        }
+
+        if (!_files.TryGetValue(sourceFileName, out string? content))
+        {
+            reason = "no such file: " + sourceFileName;
+            return false;
+        }
+
+        _files.Remove(sourceFileName);
+        _files[targetFileName] = content!;
+        reason = null;
+        return true;
+    }
+
+    public bool TryDelete(string fileName, out string? reason)
+    {
+        Operations.Add("delete:" + fileName);
+        if (FailDelete != null && string.Equals(FailDelete, fileName, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "access denied";
+            return false;
+        }
+
+        reason = _files.Remove(fileName) ? null : "no such file: " + fileName;
+        return reason == null;
+    }
+
+    public IReadOnlyList<string> ListFileNames()
+    {
+        return new List<string>(_files.Keys);
+    }
+
+    /// <summary>Raw stored text, for asserting on the format itself.</summary>
+    public string? ContentOf(string fileName)
+    {
+        string? content;
+        return _files.TryGetValue(fileName, out content) ? content : null;
+    }
+}
+
+/// <summary>Deterministic ids, so a saved document is reproducible and collisions can be provoked.</summary>
+internal sealed class FixedIdGenerator : IIdGenerator
+{
+    private int _next;
+
+    public string Format { get; set; } = "11111111-1111-1111-1111-1111111111{0:x3}";
+
+    public string NewId()
+    {
+        _next++;
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, Format, _next);
+    }
+}
+
+/// <summary>
+/// Canned solution membership behind the discovery seam, so reconciliation can be driven with exactly
+/// the coverage states a real tenant produces - complete, partial, unauthorized - without a tenant.
+/// </summary>
+internal sealed class FakeMembershipSource : ISolutionAwareFlowSource
+{
+    public const string CheckedAtText = "2026-10-31T12:00:00+00:00";
+
+    public Dictionary<string, ProviderResult<IReadOnlyList<WorkflowReference>>> FlowsBySolution { get; } =
+        new Dictionary<string, ProviderResult<IReadOnlyList<WorkflowReference>>>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every solution this source was asked about, in order.</summary>
+    public List<string> RequestedSolutions { get; } = new List<string>();
+
+    public Exception? ThrowFor { get; set; }
+
+    public string? ThrowForSolution { get; set; }
+
+    public ProviderKind Provider { get; set; } = ProviderKind.PowerAutomate;
+
+    public static readonly DateTimeOffset CheckedAt = new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero);
+
+    public ProviderResult<IReadOnlyList<SolutionReference>> GetSolutions(CancellationToken cancellationToken)
+    {
+        return ProviderResult<IReadOnlyList<SolutionReference>>.Complete(new List<SolutionReference>(), 0, 0, CheckedAt);
+    }
+
+    public ProviderResult<IReadOnlyList<WorkflowReference>> GetCloudFlows(string solutionId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestedSolutions.Add(solutionId);
+
+        if (ThrowFor != null && (ThrowForSolution == null || string.Equals(ThrowForSolution, solutionId, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw ThrowFor;
+        }
+
+        ProviderResult<IReadOnlyList<WorkflowReference>>? canned;
+        if (FlowsBySolution.TryGetValue(solutionId, out canned))
+        {
+            return canned;
+        }
+
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Unavailable(0, CheckedAt, "no canned answer for " + solutionId + ".");
+    }
+}
+
+/// <summary>Builds a workflow record, and the provider results reconciliation is driven with.</summary>
+internal static class FlowRef
+{
+    public const string Environment = "55555555-5555-5555-5555-555555555555";
+
+    public static WorkflowReference Create(
+        string workflowId,
+        string? name = null,
+        ProviderKind provider = ProviderKind.PowerAutomate,
+        string? environmentId = null)
+    {
+        return new WorkflowReference(
+            WorkflowKey.Create(provider, environmentId ?? Environment, workflowId),
+            name ?? ("Flow " + workflowId),
+            WorkflowState.Enabled,
+            rawStateCode: 1,
+            rawCategory: 5);
+    }
+
+    public static ProviderResult<IReadOnlyList<WorkflowReference>> Complete(params WorkflowReference[] flows)
+    {
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Complete(
+            new List<WorkflowReference>(flows), 1, flows.Length, FakeMembershipSource.CheckedAt);
+    }
+
+    public static ProviderResult<IReadOnlyList<WorkflowReference>> Partial(string? message, params WorkflowReference[] flows)
+    {
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Partial(
+            new List<WorkflowReference>(flows), 1, flows.Length, FakeMembershipSource.CheckedAt,
+            message ?? "canned pages exhausted");
+    }
+
+    public static ProviderResult<IReadOnlyList<WorkflowReference>> Unauthorized()
+    {
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Unauthorized(0, FakeMembershipSource.CheckedAt, "the connection may not read this solution");
+    }
+
+    public static ProviderResult<IReadOnlyList<WorkflowReference>> Unavailable(string? message = null)
+    {
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Unavailable(0, FakeMembershipSource.CheckedAt, message ?? "the solution could not be reached");
+    }
+
+    public static ProviderResult<IReadOnlyList<WorkflowReference>> Stale(params WorkflowReference[] flows)
+    {
+        return ProviderResult<IReadOnlyList<WorkflowReference>>.Stale(
+            new List<WorkflowReference>(flows), 1, flows.Length, FakeMembershipSource.CheckedAt,
+            "the source cannot make its rows any fresher");
     }
 }
 
@@ -297,5 +558,3 @@ internal static class RunBuilder
             parentRunId: parentRunId);
     }
 }
-
-

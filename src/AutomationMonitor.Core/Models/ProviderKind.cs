@@ -1,3 +1,5 @@
+using System;
+
 namespace AutomationMonitor.Core.Models
 {
     /// <summary>
@@ -58,6 +60,46 @@ namespace AutomationMonitor.Core.Models
         public static bool IsImplemented(ProviderKind provider)
         {
             return provider == ProviderKind.PowerAutomate;
+        }
+
+        /// <summary>
+        /// Read a provider namespace back from stored text. Only an exact namespace matches: an
+        /// unrecognised value must never fall through to <see cref="ProviderKind.Unknown"/>, because
+        /// that would let a member of a provider this build does not know about be merged with a
+        /// genuinely unknown one. The caller reports the value instead.
+        /// </summary>
+        public static bool TryParse(string? token, out ProviderKind provider)
+        {
+            provider = ProviderKind.Unknown;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return false;
+            }
+
+            string text = token!.Trim().ToLowerInvariant();
+            foreach (ProviderKind candidate in new[]
+            {
+                ProviderKind.PowerAutomate,
+                ProviderKind.LogicAppsConsumption,
+                ProviderKind.LogicAppsStandard
+            })
+            {
+                if (string.Equals(Prefix(candidate), text, StringComparison.Ordinal))
+                {
+                    provider = candidate;
+                    return true;
+                }
+            }
+
+            // "unknown" is a namespace a file may legitimately carry, so it is matched explicitly
+            // rather than by falling off the end of the loop.
+            if (string.Equals(Prefix(ProviderKind.Unknown), text, StringComparison.Ordinal))
+            {
+                provider = ProviderKind.Unknown;
+                return true;
+            }
+
+            return false;
         }
     }
 }

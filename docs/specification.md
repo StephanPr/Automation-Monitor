@@ -843,6 +843,24 @@ Store locally:
 
 Use a versioned JSON schema and/or XrmToolBox settings helpers. Scope settings by environment and tenant where appropriate, and support safe export/import. Never persist access tokens or client secrets inside these settings.
 
+Implemented shape (core layer, milestone M4): one file, `watchlists.json`, in the plugin's own folder
+under the host's settings directory, holding the watchlists, the per-environment active selection and the
+application defaults together so a save cannot leave the halves out of step.
+
+- Every record carries `schemaVersion` and a `kind` discriminator. A file written by a newer version, one
+  whose schema is too old, one that cannot be parsed, one truncated mid-write, and one that does not
+  identify itself as this tool's store are all **refused whole** and left exactly where they are; the
+  operator is told which, and an ordinary save may not write over a refused file.
+- Timestamps are stored as ISO 8601 UTC strings and parsed invariantly. Neither a missing nor a malformed
+  timestamp becomes "now": an unobserved member stays unobserved.
+- A save writes a scratch file, moves the previous file to a backup, then moves the scratch file into
+  place. If the last step fails the previous copy is put back; if that fails too, the message says which
+  file still holds it.
+- Clearing the saved watchlists keeps the newest content under a dated name and removes the remaining
+  recovery copies from the recovery path, so a reset stays a reset without shredding data.
+- Control characters in provider-supplied names are stored as single spaces; everything else about a name
+  survives the file byte for byte.
+
 ### Packaging
 
 - Deliver as an **XrmToolBox plugin**, not as a Dataverse server plugin or installed Dataverse solution.

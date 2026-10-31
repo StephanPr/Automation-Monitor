@@ -512,6 +512,15 @@ GET https://api.powerplatform.com/powerautomate/environments/{environmentId}/flo
 
 Use the documented and supported API, not private browser network endpoints.
 
+**Recorded outcome of that comparison (M3):** direct Dataverse `flowrun` retrieval is the implemented
+run source, because it needs no credential beyond the connection the operator already has. The
+endpoint above requires its own delegated token for the Power Platform audience plus an app
+registration, and its documented surface for run listing exposes no filter, page-size or continuation
+parameter and no response body schema — so coverage and paging could only be built on
+reverse-engineered behaviour, which this document rules out. The seam that would host a second
+provider is the same `IWorkflowRunSource` the Dataverse provider implements. `docs/provider-capabilities.md`
+holds the verified field-by-field evidence for the chosen source.
+
 ### 11.3 Logic Apps Consumption
 
 Microsoft's Azure management REST API provides per-workflow run listing:
@@ -717,6 +726,13 @@ The **canonical workflow key** includes its provider and scope, not just its nam
 | `ProviderName` | Which API supplied the record. |
 | `ObservedAtUtc` | When the plugin last received this observation. |
 | `DataQuality` | Complete/partial/stale or flags explaining source limitations. |
+
+Implemented as `WorkflowRun` + `RunKey` in the core: `Duration` is reported with its basis
+(`Measured` from the stored instants, `ProviderReported` from the source's own column, or
+`NotAvailable` while running) and a finished run with no end instant is a reported timing gap rather
+than a zero; `TrackingId` is `CorrelationId`; `ProviderName` is `DataSource`; `ObservedAtUtc` is
+`CheckedAtUtc`; `DataQuality` is `CoverageState`, carried on every row so an aggregate cannot wash the
+qualifier out. See `docs/provider-capabilities.md` for what the current source can and cannot fill.
 
 ### 14.3 Watchlist
 

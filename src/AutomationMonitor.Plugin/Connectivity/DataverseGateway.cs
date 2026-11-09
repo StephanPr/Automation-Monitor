@@ -105,16 +105,13 @@ namespace AutomationMonitor.Plugin.Connectivity
             cancellationToken.ThrowIfCancellationRequested();
 
             QueryExpression query = new QueryExpression(DataverseSchema.WorkflowEntity);
-            query.ColumnSet = new ColumnSet(
-                DataverseSchema.WorkflowName,
-                DataverseSchema.WorkflowCategory,
-                DataverseSchema.WorkflowStateCode,
-                DataverseSchema.WorkflowStatusCode,
-                DataverseSchema.WorkflowPrimaryCategory,
-                DataverseSchema.WorkflowSecondaryCategory,
-                DataverseSchema.WorkflowDescription,
-                DataverseSchema.WorkflowCreatedOn,
-                DataverseSchema.WorkflowModifiedOn);
+
+            // The projection is a core fact, never a local choice: the platform validates every
+            // column against the table's metadata and refuses the whole query when one name is
+            // unknown, so the list lives in DataverseSchema where a guard test can refuse an
+            // undocumented column. primarycategory/secondarycategory were removed for exactly that
+            // reason - see DataverseSchema.WorkflowAttributes and docs/provider-capabilities.md.
+            query.ColumnSet = new ColumnSet(DataverseSchema.WorkflowAttributes);
             query.Distinct = true;
             query.AddOrder(DataverseSchema.WorkflowName, OrderType.Ascending);
 
@@ -146,8 +143,6 @@ namespace AutomationMonitor.Plugin.Connectivity
                     RawCategory = GetInt(entity, DataverseSchema.WorkflowCategory),
                     RawStateCode = GetInt(entity, DataverseSchema.WorkflowStateCode),
                     RawStatusCode = GetInt(entity, DataverseSchema.WorkflowStatusCode),
-                    RawPrimaryCategory = GetInt(entity, DataverseSchema.WorkflowPrimaryCategory),
-                    RawSecondaryCategory = GetInt(entity, DataverseSchema.WorkflowSecondaryCategory),
                     Description = GetString(entity, DataverseSchema.WorkflowDescription),
                     CreatedOnUtc = GetUtc(entity, DataverseSchema.WorkflowCreatedOn),
                     ModifiedOnUtc = GetUtc(entity, DataverseSchema.WorkflowModifiedOn)

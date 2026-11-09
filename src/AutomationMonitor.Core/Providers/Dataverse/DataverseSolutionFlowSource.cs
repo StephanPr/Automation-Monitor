@@ -151,9 +151,9 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         private ProviderResult<T> Fail<T>(Exception error, int pagesRead)
         {
             ProviderResultState state = ProviderErrorClassifier.Classify(error.GetType().Name, error.Message);
-            bool local = ProviderErrorClassifier.IsLocalDefect(error.GetType().Name, error.Message);
+            ProviderErrorClassifier.DefectKind defect = ProviderErrorClassifier.DefectKindOf(error.GetType().Name, error.Message);
             string reason = DiagnosticsSanitizer.Sanitize(error.Message);
-            string message = DiagnosticsSanitizer.Describe(ProviderErrorClassifier.AdviceFor(state, local), reason);
+            string message = DiagnosticsSanitizer.Describe(ProviderErrorClassifier.AdviceFor(state, defect), reason);
             DateTimeOffset checkedAtUtc = clock.UtcNow;
 
             switch (state)

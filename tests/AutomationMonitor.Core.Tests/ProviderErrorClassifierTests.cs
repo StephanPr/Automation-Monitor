@@ -181,4 +181,84 @@ public class ProviderErrorClassifierTests
         Assert.Contains("table or column", advice, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Automation Monitor", advice, StringComparison.Ordinal);
     }
+
+    // ---- the first live session: a rejected column is this build's fault, not the tenant's -------
+
+    /// <summary>
+    /// The shape of the fault the first live run produced when the workflow query projected
+    /// <c>primarycategory</c>. Dataverse answered that request clearly and usefully - "no such
+    /// attribute" - so classifying it as Unavailable and advising "the environment did not answer, check
+    /// the connection" blamed a working connection for a column this build invented.
+    /// </summary>
+    [Fact]
+    public void ARejectedColumnIsNotReportedAsAnEnvironmentOutage()
+    {
+        string message = "The 'workflow' entity doesn't contain attribute with Name = 'primarycategory' and NameMapping = 'Logical' (lookup attribute by name is not supported).";
+
+        Assert.Equal(ProviderResultState.Unsupported, ProviderErrorClassifier.Classify("OrganizationServiceFault", message));
+        Assert.Equal(ProviderErrorClassifier.DefectKind.RejectedAttribute, ProviderErrorClassifier.DefectKindOf("OrganizationServiceFault", message));
+        Assert.True(ProviderErrorClassifier.IsLocalDefect("OrganizationServiceFault", message));
+    }
+
+    /// <summary>
+    /// The platform has been seen with both apostrophe spellings, and the sentence can arrive reworded
+    /// by a transport layer; matching the fragment rather than the whole phrase is what keeps the
+    /// detection alive.
+    /// </summary>
+    [Theory]
+    [InlineData("The 'workflow' entity doesn't contain attribute with Name = 'primarycategory'.")]
+    [InlineData("The 'workflow' entity does not contain attribute with Name = 'secondarycategory'.")]
+    [InlineData("The 'flowrun' entity DOESN'T CONTAIN ATTRIBUTE WITH NAME = 'duration'.")]
+    public void EverySpellingOfTheRejectionIsCaught(string message)
+    {
+        Assert.Equal(ProviderErrorClassifier.DefectKind.RejectedAttribute, ProviderErrorClassifier.DefectKindOf(null, message));
+        Assert.Equal(ProviderResultState.Unsupported, ProviderErrorClassifier.Classify(null, message));
+    }
+
+    [Fact]
+    public void RejectionAdviceNamesThisBuildAndClearsTheConnection()
+    {
+        string advice = ProviderErrorClassifier.AdviceFor(ProviderResultState.Unsupported, ProviderErrorClassifier.DefectKind.RejectedAttribute);
+
+        Assert.Contains("Automation Monitor", advice, StringComparison.Ordinal);
+        Assert.Contains("column", advice, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rejected", advice, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("did not answer", advice, StringComparison.OrdinalIgnoreCase);
+        Assert.False(advice.Contains("check the connection", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The two local kinds need different repairs - fix the column list, or fix the reader - so they
+    /// must not collapse into one sentence the way a single bool allowed.
+    /// </summary>
+    [Fact]
+    public void TheTwoLocalDefectsGiveDifferentAdvice()
+    {
+        string mapping = ProviderErrorClassifier.AdviceFor(ProviderResultState.Unsupported, ProviderErrorClassifier.DefectKind.Mapping);
+        string rejected = ProviderErrorClassifier.AdviceFor(ProviderResultState.Unsupported, ProviderErrorClassifier.DefectKind.RejectedAttribute);
+
+        Assert.NotEqual(mapping, rejected);
+        Assert.Contains("did return", mapping, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("column list", rejected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ARejectedQueryOutranksAnAccessWordInTheSameMessage()
+    {
+        string message = "The 'workflow' entity doesn't contain attribute with Name = 'primarycategory'; the caller does not have permission to add one.";
+
+        Assert.Equal(ProviderResultState.Unsupported, ProviderErrorClassifier.Classify("FaultException", message));
+        Assert.Equal(ProviderErrorClassifier.DefectKind.RejectedAttribute, ProviderErrorClassifier.DefectKindOf("FaultException", message));
+    }
+
+    [Fact]
+    public void EnvironmentFailuresKeepTheEnvironmentAdvice()
+    {
+        Assert.Equal(
+            ProviderErrorClassifier.DefectKind.None,
+            ProviderErrorClassifier.DefectKindOf("HttpRequestException", "The remote name could not be resolved"));
+        Assert.Equal(
+            ProviderErrorClassifier.AdviceFor(ProviderResultState.Unavailable),
+            ProviderErrorClassifier.AdviceFor(ProviderResultState.Unavailable, ProviderErrorClassifier.DefectKind.None));
+    }
 }

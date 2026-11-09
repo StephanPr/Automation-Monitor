@@ -26,12 +26,6 @@ namespace AutomationMonitor.Core.Models
         /// <summary>Raw status code; source-specific detail behind the state.</summary>
         public int? RawStatusCode { get; set; }
 
-        /// <summary>Raw primary category, when the source exposes it.</summary>
-        public int? RawPrimaryCategory { get; set; }
-
-        /// <summary>Raw secondary category, when the source exposes it.</summary>
-        public int? RawSecondaryCategory { get; set; }
-
         /// <summary>Optional description text from the source.</summary>
         public string? Description { get; set; }
 

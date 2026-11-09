@@ -9,7 +9,7 @@ against a live environment. Every claim below names its evidence. Product behavi
 | Fact | Value | Evidence | Status |
 |---|---|---|---|
 | `solutioncomponent.componenttype` for a Workflow component | `29` | Microsoft Learn, Solution component table reference | Verified against documentation; **not yet executed** against a tenant |
-| `workflow.category` for a modern cloud flow | `5` | Microsoft Learn workflow entity reference + spec | Same: documented, spike pending |
+| `workflow.category` for a modern cloud flow | `5` | Microsoft Learn workflow entity reference + spec | Still documented-only: no workflow row has ever been returned, so the selector value is unconfirmed. `CloudFlowSelectionResult.DescribeDiagnostics()` now logs the category values a real environment does send, which is what will settle it |
 | SDK enum for either value | none | Reflection over `Microsoft.Xrm.Sdk` 9.0.2.2 and `XrmToolBox.Extensibility` 1.2025.10.74 | They are named constants in `DataverseSchema`, not enums |
 | `workflow.statecode` | `0` disabled, `1` enabled | Platform option-set metadata | Normalized to `WorkflowState`; raw code always retained |
 | Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64 | Used as the scope half of `WorkflowKey`; null scope stays a distinct key |
@@ -17,6 +17,9 @@ against a live environment. Every claim below names its evidence. Product behavi
 | Reading an attribute that is **not** an `AliasedValue` as one | `GetAttributeValue<AliasedValue>` **throws** `InvalidCastException`; `entity.Attributes[x] as AliasedValue` returns null instead | net48 harness loading the `Microsoft.Xrm.Sdk.dll` this XrmToolBox install ships (assembly 9.0.0.0, file 9.2.49.14828), 2026-11-09 | **Verified against the assembly the host loads**; still not a tenant observation |
 | Absent attribute, and attribute present with a null value | both read as null; neither throws | Same harness | Verified client-side |
 | A value in a shape the reader does not accept | refused: `DataverseMappingException` naming the column and the CLR type, never the value | `DataverseValue` xUnit cases + harness case E | Verified |
+| A projected column the table does not have | Dataverse refuses the **whole** `RetrieveMultiple`; not one row comes back | First live session, 2026-11-09: the flow query asked for `primarycategory` and the platform answered `The 'workflow' entity doesn't contain attribute with Name = 'primarycategory' and NameMapping = 'Logical'` | **Observed live** (maintainer-reported). That column is no longer projected, and `DataverseSchemaTests` keeps it out of the list |
+| The solution read against a real tenant | `complete - 975 row(s) over 4 page(s)` | First live session, 2026-11-09, after the AM-32 type-read repair | **Observed live**: the AM-32 cast defect did not return |
+| `WorkflowActivity` (the table M7 needs for classic workflows) | absent in every environment tried | First live session, 2026-11-09 | **Observed live**: M7 stays blocked on an alternative source, not on our query |
 
 ### Query shape actually issued (read-only)
 
@@ -27,6 +30,9 @@ against a live environment. Every claim below names its evidence. Product behavi
   `componenttype = 29` and `solutionid = <selected>`, `Distinct = true`, paged at 250 rows.
   `category` is deliberately **not** filtered so the excluded classic workflows can be counted
   and reported instead of disappearing.
+- The flow projection is exactly `DataverseSchema.WorkflowAttributes`: seven logical names, each one read
+  by a decision or by the grid. Nothing speculative is added, because an unknown column is not a missing
+  cell - it is a rejected query and an empty list, as the first live session proved.
 - Only `IOrganizationService.RetrieveMultiple` is called anywhere in the plugin.
 
 ### How a returned row becomes model data (measured client-side 2026-11-09)
@@ -77,6 +83,26 @@ names column behaviour and coverage - not tenant content.
 5. Record whether `ConnectionDetail.EnvironmentId` is populated for every connection type
    (Office 365, on-premises, ADX); when it is not, flows are keyed unscoped and that must be
    visible in the UI.
+
+#### Recorded answers — first live session, 2026-11-09 (maintainer-reported)
+
+The session ran on Windows against an environment of the maintainer's choosing. No tenant name, url, ids
+or payload were recorded; only column behaviour and coverage, which is what this file is for.
+
+| Item | Outcome |
+|---|---|
+| 1 | Partly answered. The solution read succeeded end to end: `complete - 975 row(s) over 4 page(s)`, proving `solution.name`/`friendlyname` and the paging signal on a real tenant. Whether `ismanaged`, `version` and `uniquename` carry values is not yet visible in the UI (discovery shows the friendly name only). |
+| 2 | **Blocked, and the cause was ours.** The flow read was answered with `The 'workflow' entity doesn't contain attribute with Name = 'primarycategory'`, so Dataverse rejected the query and no workflow row reached the model. `primarycategory` was projected but never read; it is removed, and the session must be repeated. Nothing was learned about the count matching the portal or about classic-flow exclusion. |
+| 3 | Not reached for workflows. The solution side did page (4 pages, 975 rows) without looping or duplicating. |
+| 4 | Not exercised — the connection used had read access. |
+| 5 | Not answered: no flow row was returned, so no scoped key was built. |
+
+Two facts the session produced that no checklist item asked for: `WorkflowActivity` is absent from every
+environment tried (M7's blocker), and an unknown projected column fails the entire read rather than
+returning a blank cell. The second is why the projection is now a single named list with a guard test, and
+why an empty flow list also writes `DescribeDiagnostics()` to the XrmToolBox log — the projected columns,
+the row count and the distinct `category` values seen — so the next session can settle the `category = 5`
+question from one log line instead of another guess.
 
 ## Power Automate run history (`flowrun`) — M3
 

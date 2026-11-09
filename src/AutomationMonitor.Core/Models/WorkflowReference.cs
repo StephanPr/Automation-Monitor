@@ -16,8 +16,6 @@ namespace AutomationMonitor.Core.Models
             int? rawStateCode = null,
             int? rawStatusCode = null,
             int? rawCategory = null,
-            int? rawPrimaryCategory = null,
-            int? rawSecondaryCategory = null,
             string? description = null,
             DateTimeOffset? createdOnUtc = null,
             DateTimeOffset? modifiedOnUtc = null)
@@ -33,8 +31,6 @@ namespace AutomationMonitor.Core.Models
             RawStateCode = rawStateCode;
             RawStatusCode = rawStatusCode;
             RawCategory = rawCategory;
-            RawPrimaryCategory = rawPrimaryCategory;
-            RawSecondaryCategory = rawSecondaryCategory;
             Description = description;
             CreatedOnUtc = createdOnUtc;
             ModifiedOnUtc = modifiedOnUtc;
@@ -60,10 +56,6 @@ namespace AutomationMonitor.Core.Models
         public int? RawStatusCode { get; }
 
         public int? RawCategory { get; }
-
-        public int? RawPrimaryCategory { get; }
-
-        public int? RawSecondaryCategory { get; }
 
         public string? Description { get; }
 

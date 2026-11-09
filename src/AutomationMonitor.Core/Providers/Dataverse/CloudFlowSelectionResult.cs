@@ -19,7 +19,8 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             int duplicateCount,
             int nonCloudCount,
             int unknownCategoryCount,
-            int missingIdCount)
+            int missingIdCount,
+            IReadOnlyList<string> categoryValues)
         {
             Flows = flows;
             RowsRead = rowsRead;
@@ -27,6 +28,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             NonCloudCount = nonCloudCount;
             UnknownCategoryCount = unknownCategoryCount;
             MissingIdCount = missingIdCount;
+            CategoryValues = categoryValues;
         }
 
         /// <summary>Unique cloud flows, ordered by name for a stable grid.</summary>
@@ -47,6 +49,14 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         /// <summary>Rows with no usable provider id; excluded because they cannot carry identity.</summary>
         public int MissingIdCount { get; }
 
+        /// <summary>
+        /// The distinct <c>category</c> values the rows actually carried, ascending, with how many rows
+        /// carried each. Diagnostic only: it is what settles whether
+        /// <see cref="DataverseSchema.WorkflowCategoryCloudFlow"/> is the right selector in a given
+        /// environment, which no build can decide from its own machine. Codes, never names or ids.
+        /// </summary>
+        public IReadOnlyList<string> CategoryValues { get; }
+
         /// <summary>True when the solution had workflow components but none of them were cloud flows.</summary>
         public bool HasWorkflowComponentsWithoutCloudFlows
         {
@@ -66,6 +76,37 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             Append(text, "row(s) with unknown category skipped", UnknownCategoryCount);
             Append(text, "duplicate(s) removed", DuplicateCount);
             Append(text, "row(s) without an id skipped", MissingIdCount);
+
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// The detail an operator or a maintainer needs when a flow list is empty or wrong, kept out of
+        /// the status line on purpose: the status line says what was received, this says what was asked
+        /// for and what the rows contained. Logged, never displayed - and it carries column names and
+        /// option-set codes only, so it is safe to hand to another person.
+        /// </summary>
+        public string DescribeDiagnostics()
+        {
+            StringBuilder text = new StringBuilder();
+            text.Append("Automation Monitor diagnostic - asked for columns: ")
+                .Append(string.Join(", ", DataverseSchema.WorkflowAttributes))
+                .Append("; rows read: ").Append(RowsRead.ToString(CultureInfo.InvariantCulture))
+                .Append("; cloud flow selector value: ").Append(DataverseSchema.WorkflowCategoryCloudFlow.ToString(CultureInfo.InvariantCulture));
+
+            if (CategoryValues.Count == 0)
+            {
+                text.Append("; category values seen: none");
+            }
+            else
+            {
+                text.Append("; category values seen: ").Append(string.Join(", ", CategoryValues));
+            }
+
+            if (UnknownCategoryCount > 0)
+            {
+                text.Append("; rows with no category: ").Append(UnknownCategoryCount.ToString(CultureInfo.InvariantCulture));
+            }
 
             return text.ToString();
         }

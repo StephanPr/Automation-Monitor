@@ -7,15 +7,17 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-09 - WF-A closed on the primary host: the discovery cast is reproduced, fixed and
-classified; the operator-visible discovery run against a live environment is the one gate still open.
+Last updated: 2026-11-09 - the first live session is recorded. Solutions read `complete - 975 row(s) over
+4 page(s)` and the WF-A cast did not return; flows failed for a different reason that belongs to this
+build - a projected column the platform does not have - which AM-33 removes together with the wording that
+blamed a working connection. Rerunning flow discovery is the one gate still open.
 
 ## 1. Where the project stands
 
 | Area | State | Evidence layer |
 |---|---|---|
-| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 369 xUnit tests + smoke test, executed on **Windows** (317 before WF-A) |
-| M1 solution and cloud-flow discovery | Implemented in core and gateway; **WF-A cast fixed and deployed on Windows** | Mapping decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; live discovery in XrmToolBox still to be observed |
+| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 385 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after) |
+| M1 solution and cloud-flow discovery | Implemented in core and gateway; **WF-A cast fixed and confirmed live; projection defect fixed and awaiting rerun** | Mapping decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox, the flow read never returned a row |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; no UI caller | Core layer only; never executed against a tenant |
 | M4 saved watchlists and settings | Core implemented (`a23f216`); plugin storage root and Watchlists view **paused** | Core layer only, against an in-memory file seam |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
@@ -54,7 +56,11 @@ Windows session records:
 2. the XrmToolBox version and storage root used;
 3. the action taken and the behaviour observed, including coverage and error wording;
 4. layout at 100 / 150 / 200 percent scaling and keyboard navigation;
-5. anything that could not be exercised, named as unverified rather than assumed.
+5. anything that could not be exercised, named as unverified rather than assumed;
+6. for a list that came back empty or degraded, the diagnostic line the plugin writes to the XrmToolBox
+   log (`DescribeDiagnostics()`: the columns asked for, rows read, and the distinct `category` values
+   seen). It stays in the log by decision - the status line describes the environment, the log says what
+   this build asked for - so copy it back with the report.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -84,7 +90,7 @@ work, so the deployed build was identified before anything was planned.
 | Host as measured 2026-11-09 | XrmToolBox 1.2026.9.78, Microsoft.Xrm.Sdk.dll 9.2.49.14828, PowerShell 5.1 |
 | Compile-time SDK reference | Microsoft.Xrm.Sdk 9.0.2.2 - a version-sensitive gap |
 
-### 4.2 The discovery failure: two defects, one trigger — both now measured
+### 4.2 The discovery failure: three defects, one trigger — the third only visible live
 
 Measured on the primary host on 2026-11-09, against the `Microsoft.Xrm.Sdk.dll` copy this XrmToolBox
 install loads (assembly 9.0.0.0, file 9.2.49.14828), driven by a throwaway net48 harness that
@@ -105,12 +111,22 @@ source-links the real `DataverseGateway.cs`. No tenant was involved.
    overflow types that pre-date it), keeps the coverage model and the separate last-checked timestamp,
    reports it as `Unsupported`, and words the advice as a defect in this build naming the column and the
    CLR type - never as an outage and never as a missing table.
+3. **Rejected projection - found live on 2026-11-09, fixed, rerun outstanding.** With the cast gone the
+   solution read worked end to end (`complete - 975 row(s) over 4 page(s)`), and the flow read was
+   answered with `The 'workflow' entity doesn't contain attribute with Name = 'primarycategory'`. That
+   column was projected by the gateway and read by nothing; Dataverse validates every projected column
+   and refuses the **entire** query when one is unknown, so the fault was ours from end to end. The
+   classifier then made it worse: it fell through to `Unavailable` and told the operator the environment
+   had not answered and to check the connection - about a platform that had answered precisely. Since
+   AM-33, `DataverseSchema.WorkflowAttributes` is the single workflow projection, the speculative columns
+   and the unread model fields behind them are gone, and the classifier tells a rejected query apart
+   from a misread value so neither can borrow the other's advice.
 
 ### 4.3 Phase verdicts against the current branch
 
 | Reported phase | Verdict | Why |
 |---|---|---|
-| A - discovery cast | **Fixed on the primary host (2026-11-09)** | Root cause reproduced against the host's own SDK assembly, adapter and classifier changed, 364 unit tests green, deployed through the shipped installer; the live-environment discovery observation is the remaining gate |
+| A - discovery cast | **Fixed on the primary host and confirmed live (2026-11-09)** | Root cause reproduced against the host's own SDK assembly, adapter and classifier changed, 385 unit tests green, deployed through the shipped installer; the first live session read 975 solutions over 4 pages with the cast absent. Flows then failed on the rejected projection (WF-A.5), fixed the same day - rerunning flow discovery is the remaining gate |
 | B - solution-independent browsing | **Valid, better prepared** | Normalization, category-5 selection, dedupe, paging and coverage exist and are tested; the solution-less query, the multi-select UI and the first portal deep link do not |
 | C - Azure Logic Apps discovery | **Valid, nothing exists** | The M3 rejection of the undocumented Power Platform run-list surface is the precedent to repeat |
 | D - modern UI feasibility | **Newly feasible** | XrmToolBox is installed on the primary host, so a proof of concept can be loaded and measured, not only compiled |
@@ -142,8 +158,13 @@ on Windows rather than as a pass.
 |---|---|---|---|
 | WF-A.1 | Probe the SDK behaviour directly: load the Microsoft.Xrm.Sdk.dll that XrmToolBox actually loads and call the aliased-value accessor with AliasedValue on an Entity whose attributes hold plain strings. Record whether it throws or returns null. No tenant needed. | Windows, net48; the durable fact goes in docs/provider-capabilities.md | **Done.** It throws `InvalidCastException`, for every non-`AliasedValue` shape; the fact is recorded in `docs/provider-capabilities.md` |
 | WF-A.2 | **Simple fix (chosen assumption).** Keep the type-aware unwrapping inside DataverseGateway: accept an AliasedValue, a plain value or null instead of forcing AliasedValue, for the solution mapping and the workflow-connection mapping alike. The richer Core-side row model that would make the gateway directly testable is a separate decision: it changes a seam every provider uses and belongs with WF-C, not with a bug fix. | Core compile and unit suite stay green; gateway compiles; Windows gate on discovery | **Done, with one stated deviation.** The gateway still does all SDK-shape reduction (`Unwrap` type-tests instead of casting). What moved to Core is only the *decision about a plain CLR value* - `DataverseValue.AsText/AsInt32/AsBoolean/AsUtc` plus `DataverseMappingException` - because that decision was untestable without a tenant. No seam changed, so this is not the WF-C row model. |
-| WF-A.3 | Mark local mapping and normalization failures so ProviderErrorClassifier returns Unsupported with a message naming this tool; only a request that left the process may read as Unavailable. Keep the coverage model and the separate last-checked timestamp. | New unit theory cases in the existing classification file | **Done.** `ProviderErrorClassifier` takes an `isLocalDefect` flag, recognises `DataverseMappingException` and the raw cast/overflow types, returns `Unsupported` with advice that names this tool, and keeps coverage plus the separate checked-at stamp; the four message sites pass the flag |
-| WF-A.4 | Reproduce first: discovery fails at WF-A.1 or in XrmToolBox before the fix, and the same action succeeds after it. Record both results and the build identity of each DLL. | Windows gate | **Done at the harness layer, open at the tenant layer.** Pre-fix the harness throws on the first solution row; post-fix every case maps (solutions with sparse columns, workflows with option sets, runs with BigInt durations) and an unexpected type raises `DataverseMappingException`. Deployed build: ProductVersion `0.1.0+a2f32ebc468d40bc893e8c21e81c9b8ebe5f18aa` (Release), `Plugin.dll` 28160 bytes sha256 `c5725aa4…0117`, `Core.dll` 161280 bytes sha256 `9270c799…6a0e`, installed by `packaging\Install.ps1` into `%APPDATA%\MscrmTools\XrmToolBox\Plugins` with the previous copies backed up to `PluginBackups\AutomationMonitor\20261109-153539`. **The operator's discovery run against a real environment is still required** - see section 3 |
+| WF-A.3 | Mark local mapping and normalization failures so ProviderErrorClassifier returns Unsupported with a message naming this tool; only a request that left the process may read as Unavailable. Keep the coverage model and the separate last-checked timestamp. | New unit theory cases in the existing classification file | **Done.** `ProviderErrorClassifier` takes an `isLocalDefect` flag, recognises `DataverseMappingException` and the raw cast/overflow types, returns `Unsupported` with advice that names this tool, and keeps coverage plus the separate checked-at stamp; the four message sites pass the flag. **AM-33 (2026-11-09)** replaced the bool with a typed
+`DefectKind` (`None` / `Mapping` / `RejectedAttribute`) after the live session produced a second local
+defect with an opposite cause; every message site now passes the kind, so the two can never share a
+sentence again |
+| WF-A.4 | Reproduce first: discovery fails at WF-A.1 or in XrmToolBox before the fix, and the same action succeeds after it. Record both results and the build identity of each DLL. | Windows gate | **Done at the harness layer, open at the tenant layer.** Pre-fix the harness throws on the first solution row; post-fix every case maps (solutions with sparse columns, workflows with option sets, runs with BigInt durations) and an unexpected type raises `DataverseMappingException`. Deployed build: ProductVersion `0.1.0+a2f32ebc468d40bc893e8c21e81c9b8ebe5f18aa` (Release), `Plugin.dll` 28160 bytes sha256 `c5725aa4…0117`, `Core.dll` 161280 bytes sha256 `9270c799…6a0e`, installed by `packaging\Install.ps1` into `%APPDATA%\MscrmTools\XrmToolBox\Plugins` with the previous copies backed up to `PluginBackups\AutomationMonitor\20261109-153539`. **The operator's discovery run against a real environment is still required** - see section 3. Partially met on 2026-11-09: solutions were observed complete; flows were not, for the WF-A.5 reason. That rerun is still owed after AM-33. Redeployed 2026-11-09 19:35 through `scripts\deploy.ps1 -Configuration Release -StorageRoot %APPDATA%\MscrmTools\XrmToolBox`: `Plugin.dll` 28160 bytes sha256 `eb74aa33…321a`, `Core.dll` 162816 bytes sha256 `0fc53142…38bc`, both ProductVersion `0.1.0+622d9150…` (that hash is `HEAD` - AM-33's changes are not committed, so the hash alone does not identify this build), previous copies backed up to `PluginBackups\AutomationMonitor\20261109-193532` |
+| WF-A.5 | Stop guessing at schema in the query: `DataverseSchema.WorkflowAttributes` becomes the only workflow projection, and the unread `primarycategory`/`secondarycategory` pair leaves the query, the raw model, the reference model and the mapper with it. | Guard test fails before the change and passes after; unit suite and plugin compile stay green | **Done (AM-33, 2026-11-09).** Seven documented columns, one list, one consumer. `DataverseSchemaTests` pins the set and rejects the removed names in either casing; the plugin compiles `0 Warning(s) 0 Error(s)` |
+| WF-A.6 | Make the next empty list explainable from the log without widening the status line: `CloudFlowSelectionResult.DescribeDiagnostics()` (columns asked for, rows read, selector value, distinct `category` values with counts, rows with no category) written through `LogInfo` when discovery yields nothing or is not usable | Unit test plus code read; the logged line is what the maintainer copies back | **Done (AM-33, 2026-11-09).** Log-only - the status line and `DescribeCoverage()` are untouched, because detail belongs in the log and honesty about coverage belongs on screen |
 
 ### 5.3 WF-B - browse workflows without picking a solution
 
@@ -188,7 +209,9 @@ WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a
 ## 6. Sequence, dependencies and what stays paused
 
 1. WF-0 host parity: nothing on Windows can be measured before it.
-2. WF-A: discovery must work on the real host before anything else is visible there.
+2. WF-A: discovery must work on the real host before anything else is visible there. WF-A.1 to A.6 are
+   done; what remains is the maintainer's rerun of flow discovery on the AM-33 build, which is also the
+   first chance to confirm the `category` values the new diagnostic logs.
 3. WF-B.1 spike, then WF-B.2 to B.5.
 4. Resume M4: C5 plugin storage root and the disk ISettingsFileAccess, C6 the Watchlists view,
    tab host and reconciliation preview, C7 the full gate with an unchanged package audit, C8 the
@@ -215,12 +238,23 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
   cross.
 - WF-A stays the simple adapter fix until evidence says otherwise. Moving the row abstraction
   into Core is a separate decision with its own risk, never a side effect of a bug fix.
+- A provider projects only columns its own code reads and whose documentation it can name. An unknown
+  column is not a blank cell - Dataverse refuses the whole query - so `DataverseSchema.WorkflowAttributes`
+  is the one projection list, `DataverseSchemaTests` is its guard, and a gateway builds its `ColumnSet`
+  from that list alone. Guessing at a schema name is a defect, not a hedge.
+- Wording follows blame. Only a request that left the process may read as "the environment did not
+  answer"; a rejected query or a refused value names this build. A status line describes the environment,
+  never the plugin's internals - the internals go to the log.
 - WF-D ends in a recommendation and a measurement, never in a converted view.
 
 ## 8. Explicitly out of scope for this pass
 
-- No WF-A to WF-E code, and nothing built or tested: the .NET 10 SDK is not yet installed on the
-  primary host, so even the existing gates were not re-run here.
+- No WF-B to WF-E code. This pass stops at what the first live session proved: the projection fix, the
+  wording that follows blame, and the diagnostic that makes the next empty list explainable. The
+  solution-less query, the multi-select UI, the Azure spike, the WPF proof of concept and the design
+  reorganisation all stay behind their own checkpoints.
+- No speculative column in either direction, and no tenant data in this repository: the recorded facts
+  name column behaviour and coverage, never an environment name, url, identifier or payload.
 - No Pester or PowerShell tooling on either workstation, and no CI workflow run or read.
 - No push, merge, tag, release or history rewrite. Every local commit stays local; the M4
   implementation stays paused at `a23f216`, with this planning commit on top of it.

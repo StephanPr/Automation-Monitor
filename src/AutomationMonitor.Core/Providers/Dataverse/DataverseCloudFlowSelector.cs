@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using AutomationMonitor.Core.Models;
 
 namespace AutomationMonitor.Core.Providers.Dataverse
@@ -15,6 +16,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         {
             List<WorkflowReference> flows = new List<WorkflowReference>();
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            SortedDictionary<int, int> categories = new SortedDictionary<int, int>();
             int rowsRead = 0;
             int duplicates = 0;
             int nonCloud = 0;
@@ -31,6 +33,15 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                     {
                         missingId++;
                         continue;
+                    }
+
+                    // Tally what the environment really sent before any row is excluded, so the
+                    // diagnostics describe the source and not this selection.
+                    if (record.RawCategory.HasValue)
+                    {
+                        int seenCount;
+                        categories.TryGetValue(record.RawCategory.Value, out seenCount);
+                        categories[record.RawCategory.Value] = seenCount + 1;
                     }
 
                     WorkflowKey? probe;
@@ -81,7 +92,14 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 return string.Compare(left.WorkflowId, right.WorkflowId, StringComparison.Ordinal);
             });
 
-            return new CloudFlowSelectionResult(flows, rowsRead, duplicates, nonCloud, unknownCategory, missingId);
+            List<string> categoryValues = new List<string>();
+            foreach (KeyValuePair<int, int> category in categories)
+            {
+                categoryValues.Add(
+                    category.Key.ToString(CultureInfo.InvariantCulture) + " x" + category.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return new CloudFlowSelectionResult(flows, rowsRead, duplicates, nonCloud, unknownCategory, missingId, categoryValues);
         }
     }
 }

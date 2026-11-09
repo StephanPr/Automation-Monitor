@@ -42,8 +42,6 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         public const string WorkflowCategory = "category";
         public const string WorkflowStateCode = "statecode";
         public const string WorkflowStatusCode = "statuscode";
-        public const string WorkflowPrimaryCategory = "primarycategory";
-        public const string WorkflowSecondaryCategory = "secondarycategory";
         public const string WorkflowDescription = "description";
         public const string WorkflowCreatedOn = "createdon";
         public const string WorkflowModifiedOn = "modifiedon";
@@ -52,6 +50,12 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         /// workflow.category value for a modern Power Automate cloud flow. Anything else in the
         /// workflow table is a classic process, dialog, rule or business process flow and is
         /// excluded from the cloud-flow catalogue.
+        ///
+        /// This value is a decision, not an observation: no live environment has confirmed it yet.
+        /// The first real session proved the projection (975 solutions read) but never reached the
+        /// flow rows, so <c>category</c> itself is still unproven. If it is wrong the symptom is an
+        /// empty flow list with a Complete result - the diagnostics line (CloudFlowSelectionResult)
+        /// reports the category values actually seen so one run settles it.
         /// </summary>
         public const int WorkflowCategoryCloudFlow = 5;
 
@@ -60,6 +64,33 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
         /// <summary>Dataverse statecode for an enabled workflow.</summary>
         public const int StateCodeEnabled = 1;
+
+        /// <summary>
+        /// The one workflow projection: every column the plugin asks Dataverse to return for a
+        /// solution's workflows. The gateway builds its <c>ColumnSet</c> from this list and from
+        /// nothing else, because the platform validates every projected column against the table's
+        /// metadata and refuses the <em>whole query</em> when one name is unknown - which turns a
+        /// single speculative column into a flow list that is silently empty.
+        ///
+        /// <para>
+        /// <c>primarycategory</c> and <c>secondarycategory</c> used to be projected here. A real
+        /// environment rejected the read with <c>The 'workflow' entity doesn't contain attribute
+        /// with Name = 'primarycategory'</c> on 2026-11-09 (see docs/provider-capabilities.md): they
+        /// are not documented columns of this table and nothing read their values, so they are gone
+        /// rather than optional. A guard test in DataverseSchemaTests refuses to let an undocumented
+        /// name back in.
+        /// </para>
+        /// </summary>
+        public static readonly string[] WorkflowAttributes =
+        {
+            WorkflowName,
+            WorkflowCategory,
+            WorkflowStateCode,
+            WorkflowStatusCode,
+            WorkflowDescription,
+            WorkflowCreatedOn,
+            WorkflowModifiedOn
+        };
 
         // ---- flowrun: execution history (M3) ------------------------------------------------
         //
@@ -122,9 +153,11 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
         /// <summary>
         /// The columns the run provider asks the source for, in the order the gateway builds them.
-        /// A guard test pins this list against <see cref="RunAttributeCount"/>: a column added here
+        /// The projection guard test in the core test project pins their shape: a column added here
         /// and forgotten in the query (or the reverse) would otherwise mean a silently missing
-        /// value on every row.
+        /// value on every row. Every name still has to survive a
+        /// real environment - see the open question about <see cref="RunDuration"/> in
+        /// docs/provider-capabilities.md, which is the same failure that emptied the flow list.
         /// </summary>
         public static readonly string[] RunAttributes =
         {

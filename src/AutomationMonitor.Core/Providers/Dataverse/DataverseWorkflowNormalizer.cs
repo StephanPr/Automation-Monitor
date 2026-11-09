@@ -60,8 +60,6 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 record.RawStateCode,
                 record.RawStatusCode,
                 record.RawCategory,
-                record.RawPrimaryCategory,
-                record.RawSecondaryCategory,
                 record.Description,
                 record.CreatedOnUtc,
                 record.ModifiedOnUtc);

@@ -68,8 +68,6 @@ public class DataverseWorkflowNormalizerTests
         DateTimeOffset modified = new DateTimeOffset(2026, 3, 5, 8, 9, 10, TimeSpan.Zero);
         RawWorkflowRecord record = Row("66666666-0000-0000-0000-000000000001", 5, "Audit", state: 9);
         record.RawStatusCode = 20;
-        record.RawPrimaryCategory = 100;
-        record.RawSecondaryCategory = 200;
         record.Description = "Runs nightly";
         record.CreatedOnUtc = created;
         record.ModifiedOnUtc = modified;
@@ -80,8 +78,9 @@ public class DataverseWorkflowNormalizerTests
         Assert.Equal(9, reference!.RawStateCode);
         Assert.Equal(20, reference.RawStatusCode);
         Assert.Equal(5, reference.RawCategory);
-        Assert.Equal(100, reference.RawPrimaryCategory);
-        Assert.Equal(200, reference.RawSecondaryCategory);
+        // No primary/secondary category by design: those are not attributes of the workflow table, and
+        // the model carries only what the platform really publishes for a projected column. The
+        // projection guard in DataverseSchemaTests keeps the query matching that.
         Assert.Equal("Runs nightly", reference.Description);
         Assert.Equal(created, reference.CreatedOnUtc);
         Assert.Equal(modified, reference.ModifiedOnUtc);

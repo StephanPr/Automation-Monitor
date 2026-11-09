@@ -205,8 +205,8 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
 - No WF-A to WF-E code, and nothing built or tested: the .NET 10 SDK is not yet installed on the
   primary host, so even the existing gates were not re-run here.
 - No Pester or PowerShell tooling on either workstation, and no CI workflow run or read.
-- No push, merge, tag, release or history rewrite. The four local commits stay local and the
-  branch stays paused at `a23f216`.
+- No push, merge, tag, release or history rewrite. Every local commit stays local; the M4
+  implementation stays paused at `a23f216`, with this planning commit on top of it.
 - No force-add of an excluded file: docs/roadmap.md is the only new tracked document.
 
 ## 9. Keeping the two machines in step

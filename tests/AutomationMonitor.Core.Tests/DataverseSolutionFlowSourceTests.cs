@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using AutomationMonitor.Core.Models;
 using AutomationMonitor.Core.Providers.Dataverse;
+using AutomationMonitor.Core.Services;
 using Xunit;
 
 namespace AutomationMonitor.Core.Tests;
@@ -94,6 +95,45 @@ public class DataverseSolutionFlowSourceTests
 
         Assert.Equal(ProviderResultState.Unsupported, result.State);
         Assert.Contains("does not expose the expected table", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The WF-A regression: a value this tool could not map happens after the environment has
+    /// answered, so it must never be described as a connection that went quiet. The state stays
+    /// Unsupported (no new coverage label), the wording names this tool and the column, and the
+    /// shared renderer still shows the honest coverage label.
+    /// </summary>
+    [Fact]
+    public void GetSolutions_MappingDefectNamesThisToolInsteadOfTheConnection()
+    {
+        FakeRowSource rows = new FakeRowSource();
+        rows.ThrowForSolutions = new DataverseMappingException("uniquename", "text", "Guid");
+        DataverseSolutionFlowSource source = new DataverseSolutionFlowSource(rows, new FixedClock());
+
+        ProviderResult<IReadOnlyList<SolutionReference>> result = source.GetSolutions(CancellationToken.None);
+
+        Assert.Equal(ProviderResultState.Unsupported, result.State);
+        Assert.False(result.IsUsable);
+        Assert.Null(result.Value);
+        Assert.Contains("Automation Monitor could not read a value", result.Message, StringComparison.Ordinal);
+        Assert.Contains("uniquename", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("did not answer", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("does not expose the expected table", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NOT SUPPORTED", SourceStatus.Describe("Solutions", result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetSolutions_RawCastFailureIsNoLongerReportedAsAnOutage()
+    {
+        FakeRowSource rows = new FakeRowSource();
+        rows.ThrowForSolutions = new InvalidCastException(
+            "Unable to cast object of type 'System.String' to type 'Microsoft.Xrm.Sdk.AliasedValue'.");
+        DataverseSolutionFlowSource source = new DataverseSolutionFlowSource(rows, new FixedClock());
+
+        ProviderResult<IReadOnlyList<SolutionReference>> result = source.GetSolutions(CancellationToken.None);
+
+        Assert.Equal(ProviderResultState.Unsupported, result.State);
+        Assert.DoesNotContain("Check the connection", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

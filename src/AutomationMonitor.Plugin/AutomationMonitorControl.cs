@@ -234,8 +234,9 @@ namespace AutomationMonitor.Plugin
             }
 
             ProviderResultState state = ProviderErrorClassifier.Classify(error.GetType().Name, error.Message);
+            bool local = ProviderErrorClassifier.IsLocalDefect(error.GetType().Name, error.Message);
             string reason = DiagnosticsSanitizer.Describe(
-                ProviderErrorClassifier.AdviceFor(state),
+                ProviderErrorClassifier.AdviceFor(state, local),
                 DiagnosticsSanitizer.Sanitize(error.Message));
             view.Say(SourceStatus.Describe(sourceLabel, state, 0, 0, clock.UtcNow, reason));
             LogError("Automation Monitor could not read " + sourceLabel + ".");

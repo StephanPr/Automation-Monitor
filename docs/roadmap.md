@@ -7,15 +7,15 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-09 - Windows field report triage, dual-host workflow adopted, WF track opened.
-**No implementation was performed in that pass**; every WF checkpoint below is unstarted.
+Last updated: 2026-11-09 - WF-A closed on the primary host: the discovery cast is reproduced, fixed and
+classified; the operator-visible discovery run against a live environment is the one gate still open.
 
 ## 1. Where the project stands
 
 | Area | State | Evidence layer |
 |---|---|---|
-| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 317 xUnit tests + smoke test, executed on Linux |
-| M1 solution and cloud-flow discovery | Implemented in core and gateway; **reported failing in XrmToolBox on Windows** (WF-A) | Core logic verified; the gateway mapping was never unit tested |
+| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 369 xUnit tests + smoke test, executed on **Windows** (317 before WF-A) |
+| M1 solution and cloud-flow discovery | Implemented in core and gateway; **WF-A cast fixed and deployed on Windows** | Mapping decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; live discovery in XrmToolBox still to be observed |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; no UI caller | Core layer only; never executed against a tenant |
 | M4 saved watchlists and settings | Core implemented (`a23f216`); plugin storage root and Watchlists view **paused** | Core layer only, against an in-memory file seam |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
@@ -77,29 +77,33 @@ work, so the deployed build was identified before anything was planned.
 | Host as measured 2026-11-09 | XrmToolBox 1.2026.9.78, Microsoft.Xrm.Sdk.dll 9.2.49.14828, PowerShell 5.1 |
 | Compile-time SDK reference | Microsoft.Xrm.Sdk 9.0.2.2 - a version-sensitive gap |
 
-### 4.2 The discovery failure: two defects, one trigger
+### 4.2 The discovery failure: two defects, one trigger — both now measured
 
-Both remain a **hypothesis with a local proof path** until WF-A.1 and WF-A.4 close. Nothing
-has been reproduced or fixed yet.
+Measured on the primary host on 2026-11-09, against the `Microsoft.Xrm.Sdk.dll` copy this XrmToolBox
+install loads (assembly 9.0.0.0, file 9.2.49.14828), driven by a throwaway net48 harness that
+source-links the real `DataverseGateway.cs`. No tenant was involved.
 
-1. **Trigger.** `DataverseGateway.Unwrap` obtains every attribute by asking the SDK accessor
-   for an AliasedValue (the generic getter parameterised with that type). The solution query
-   has no joined entity, so every attribute arrives as a plain root value. If the SDK build the
-   host loads casts instead of type-testing, the first solution row throws exactly the reported
-   message. The code is identical on `eb6bf1c` and on the current branch, so the defect is live
-   on both. That version-sensitive assumption is what must be measured, not argued: WF-A.1
-   tests it against the very assembly the host loads, with no tenant required.
-2. **Misclassification.** `DataverseSolutionFlowSource.Fail` passes the exception to
-   `ProviderErrorClassifier`, which carries no marker for a failure inside this tool, so it
-   falls through to `Unavailable` and the operator is told the environment did not answer and
-   should be re-checked. A local defect must never read as the environment being down: the
-   coverage model stays, the failure category and the wording become accurate.
+1. **Trigger - confirmed.** `DataverseGateway.Unwrap` obtained every attribute through the generic
+   accessor parameterised with `AliasedValue`. That accessor **throws** `InvalidCastException` for any
+   attribute that is not an `AliasedValue`: a plain `String` reproduces the reported message verbatim,
+   and so does every other shape (an `OptionSetValue`, a `Boolean`, a `DateTime`). Because neither the
+   solution query nor the run query joins another table, all three readers - solutions, workflows and
+   runs - were broken, not only solutions. `value as AliasedValue` never throws and returns the wrapper
+   only for a genuine `AliasedValue`; a missing attribute and a present-with-null-value attribute both
+   read as null.
+2. **Misclassification - confirmed and fixed.** `DataverseSolutionFlowSource.Fail` passed the exception
+   to `ProviderErrorClassifier`, which had no marker for a failure inside this tool, so a local cast
+   failure fell through to `Unavailable` and told the operator the environment had not answered. The
+   classifier now recognises a local mapping defect (`DataverseMappingException`, or the raw cast and
+   overflow types that pre-date it), keeps the coverage model and the separate last-checked timestamp,
+   reports it as `Unsupported`, and words the advice as a defect in this build naming the column and the
+   CLR type - never as an outage and never as a missing table.
 
 ### 4.3 Phase verdicts against the current branch
 
 | Reported phase | Verdict | Why |
 |---|---|---|
-| A - discovery cast | **Still fully valid** | Neither the gateway mapping nor the classifier changed after `eb6bf1c` |
+| A - discovery cast | **Fixed on the primary host (2026-11-09)** | Root cause reproduced against the host's own SDK assembly, adapter and classifier changed, 364 unit tests green, deployed through the shipped installer; the live-environment discovery observation is the remaining gate |
 | B - solution-independent browsing | **Valid, better prepared** | Normalization, category-5 selection, dedupe, paging and coverage exist and are tested; the solution-less query, the multi-select UI and the first portal deep link do not |
 | C - Azure Logic Apps discovery | **Valid, nothing exists** | The M3 rejection of the undocumented Power Platform run-list surface is the precedent to repeat |
 | D - modern UI feasibility | **Newly feasible** | XrmToolBox is installed on the primary host, so a proof of concept can be loaded and measured, not only compiled |
@@ -119,14 +123,20 @@ runtime gate in section 3, never a successful compile.
 | WF-0.3 | Confirm a real Python for the packaging tests (the WindowsApps python.exe may be a Store stub) and that autocrlf plus .gitattributes still hand the packager LF assets that ship as CRLF | packaging tests plus a real package audit |
 | WF-0.4 | Re-confirm the documented minimum host against the installed XrmToolBox 1.2026.9.78 and the strong-named McTools.Xrm.Connection binding | docs/distribution.md and the manifest, no code change |
 
+WF-0.2 and WF-0.3 were measured on 2026-11-09: the unit suite (317 then, 369 after WF-A), the smoke
+`PASS:` line and the `net48` build (`0 Warning(s) 0 Error(s)`) all reproduce on Windows. There is no
+real Python on that host - `python` and `python3` resolve to the WindowsApps store stub and no `py`
+launcher is installed - so the packaging suite stays an Ubuntu/CI gate and is reported as not executed
+on Windows rather than as a pass.
+
 ### 5.2 WF-A - make discovery work on the real host
 
-| ID | Scope | Host and gate |
-|---|---|---|
-| WF-A.1 | Probe the SDK behaviour directly: load the Microsoft.Xrm.Sdk.dll that XrmToolBox actually loads and call the aliased-value accessor with AliasedValue on an Entity whose attributes hold plain strings. Record whether it throws or returns null. No tenant needed. | Windows, net48; the durable fact goes in docs/provider-capabilities.md |
-| WF-A.2 | **Simple fix (chosen assumption).** Keep the type-aware unwrapping inside DataverseGateway: accept an AliasedValue, a plain value or null instead of forcing AliasedValue, for the solution mapping and the workflow-connection mapping alike. The richer Core-side row model that would make the gateway directly testable is a separate decision: it changes a seam every provider uses and belongs with WF-C, not with a bug fix. | Core compile and unit suite stay green; gateway compiles; Windows gate on discovery |
-| WF-A.3 | Mark local mapping and normalization failures so ProviderErrorClassifier returns Unsupported with a message naming this tool; only a request that left the process may read as Unavailable. Keep the coverage model and the separate last-checked timestamp. | New unit theory cases in the existing classification file |
-| WF-A.4 | Reproduce first: discovery fails at WF-A.1 or in XrmToolBox before the fix, and the same action succeeds after it. Record both results and the build identity of each DLL. | Windows gate |
+| ID | Scope | Host and gate | Status (2026-11-09) |
+|---|---|---|---|
+| WF-A.1 | Probe the SDK behaviour directly: load the Microsoft.Xrm.Sdk.dll that XrmToolBox actually loads and call the aliased-value accessor with AliasedValue on an Entity whose attributes hold plain strings. Record whether it throws or returns null. No tenant needed. | Windows, net48; the durable fact goes in docs/provider-capabilities.md | **Done.** It throws `InvalidCastException`, for every non-`AliasedValue` shape; the fact is recorded in `docs/provider-capabilities.md` |
+| WF-A.2 | **Simple fix (chosen assumption).** Keep the type-aware unwrapping inside DataverseGateway: accept an AliasedValue, a plain value or null instead of forcing AliasedValue, for the solution mapping and the workflow-connection mapping alike. The richer Core-side row model that would make the gateway directly testable is a separate decision: it changes a seam every provider uses and belongs with WF-C, not with a bug fix. | Core compile and unit suite stay green; gateway compiles; Windows gate on discovery | **Done, with one stated deviation.** The gateway still does all SDK-shape reduction (`Unwrap` type-tests instead of casting). What moved to Core is only the *decision about a plain CLR value* - `DataverseValue.AsText/AsInt32/AsBoolean/AsUtc` plus `DataverseMappingException` - because that decision was untestable without a tenant. No seam changed, so this is not the WF-C row model. |
+| WF-A.3 | Mark local mapping and normalization failures so ProviderErrorClassifier returns Unsupported with a message naming this tool; only a request that left the process may read as Unavailable. Keep the coverage model and the separate last-checked timestamp. | New unit theory cases in the existing classification file | **Done.** `ProviderErrorClassifier` takes an `isLocalDefect` flag, recognises `DataverseMappingException` and the raw cast/overflow types, returns `Unsupported` with advice that names this tool, and keeps coverage plus the separate checked-at stamp; the four message sites pass the flag |
+| WF-A.4 | Reproduce first: discovery fails at WF-A.1 or in XrmToolBox before the fix, and the same action succeeds after it. Record both results and the build identity of each DLL. | Windows gate | **Done at the harness layer, open at the tenant layer.** Pre-fix the harness throws on the first solution row; post-fix every case maps (solutions with sparse columns, workflows with option sets, runs with BigInt durations) and an unexpected type raises `DataverseMappingException`. Deployed build: ProductVersion `0.1.0+a2f32ebc468d40bc893e8c21e81c9b8ebe5f18aa` (Release), `Plugin.dll` 28160 bytes sha256 `c5725aa4…0117`, `Core.dll` 161280 bytes sha256 `9270c799…6a0e`, installed by `packaging\Install.ps1` into `%APPDATA%\MscrmTools\XrmToolBox\Plugins` with the previous copies backed up to `PluginBackups\AutomationMonitor\20261109-153539`. **The operator's discovery run against a real environment is still required** - see section 3 |
 
 ### 5.3 WF-B - browse workflows without picking a solution
 

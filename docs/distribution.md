@@ -96,9 +96,12 @@ End users follow `README-WINDOWS.md` inside the zip. The maintainer-relevant fac
 - Default target is the roaming storage the host uses: `%APPDATA%\MscrmTools\XrmToolBox\Plugins`.
   A host started with `/overridepath:<folder>` keeps its tools under that folder instead, so
   `Install.ps1 -StorageRoot <folder>` (or `AUTOMATION_MONITOR_XTB_ROOT`) is the supported way to
-  reach it. The old `scripts/deploy.ps1` convention - install next to the exe and start with
-  `/overridepath:.` - is still correct for development and is now *implemented* by the same
-  installer rather than by a second copy routine.
+  reach it. The developer path is `scripts/deploy.ps1`, which stages the build output and runs this
+  same installer rather than carrying a second copy routine: it passes `-StorageRoot` when given one,
+  uses `<XrmToolBoxDirectory>\Plugins` when that folder exists (the old `/overridepath:.` convention),
+  and otherwise lets the installer resolve the roaming default. Both layouts were exercised on
+  2026-11-09 on Windows 11 with XrmToolBox 1.2026.9.78: the previous two assemblies were backed up to
+  `<storage>\PluginBackups\AutomationMonitor\<timestamp>` and exactly two files were written to `Plugins`.
 - Downloaded files carry a `Zone.Identifier`; a blocked plugin can be silently absent from the
   tool list. The installer unblocks what it copies and the guide explains the manual step.
 - The installer refuses to run while `XrmToolBox` is running, copies only manifest names, backs

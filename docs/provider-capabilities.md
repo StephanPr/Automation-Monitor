@@ -14,6 +14,9 @@ against a live environment. Every claim below names its evidence. Product behavi
 | `workflow.statecode` | `0` disabled, `1` enabled | Platform option-set metadata | Normalized to `WorkflowState`; raw code always retained |
 | Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64 | Used as the scope half of `WorkflowKey`; null scope stays a distinct key |
 | Paging signal | `EntityCollection.MoreRecords` + `PagingCookie` | Reflection over `Microsoft.Xrm.Sdk` | Followed by `PageReader`; a stopped read is `Partial` |
+| Reading an attribute that is **not** an `AliasedValue` as one | `GetAttributeValue<AliasedValue>` **throws** `InvalidCastException`; `entity.Attributes[x] as AliasedValue` returns null instead | net48 harness loading the `Microsoft.Xrm.Sdk.dll` this XrmToolBox install ships (assembly 9.0.0.0, file 9.2.49.14828), 2026-11-09 | **Verified against the assembly the host loads**; still not a tenant observation |
+| Absent attribute, and attribute present with a null value | both read as null; neither throws | Same harness | Verified client-side |
+| A value in a shape the reader does not accept | refused: `DataverseMappingException` naming the column and the CLR type, never the value | `DataverseValue` xUnit cases + harness case E | Verified |
 
 ### Query shape actually issued (read-only)
 
@@ -25,6 +28,25 @@ against a live environment. Every claim below names its evidence. Product behavi
   `category` is deliberately **not** filtered so the excluded classic workflows can be counted
   and reported instead of disappearing.
 - Only `IOrganizationService.RetrieveMultiple` is called anywhere in the plugin.
+
+### How a returned row becomes model data (measured client-side 2026-11-09)
+
+Two stages, and the split is deliberate because the second one is what unit tests can reach:
+
+1. **The gateway reduces SDK shapes to a plain CLR value.** `DataverseGateway.Unwrap` reads
+   `entity.Attributes[attribute]` and type-tests it: a genuine `AliasedValue` yields its inner value,
+   anything else is already the value. It never asks the SDK for an attribute *as* a type, because
+   that accessor casts rather than tests (see the table above). `OptionSetValue` is reduced to its
+   option value, which is what an option-set column states.
+2. **The core decides what that value means.** `DataverseValue.AsText` / `AsInt32` / `AsBoolean` /
+   `AsUtc` treat absent, null and blank as "the source did not say", convert only the shapes named by
+   the schema, and raise `DataverseMappingException` for anything else. A refusal is never a blank
+   cell: the read fails, the failure is classified as a defect in this build (`Unsupported`, with
+   advice that says the environment *did* answer), and no partially understood row reaches the grid.
+
+Consequence for `flowrun`: `isprimary` is a Picklist, so the numeric option is the evidence and the
+boolean field stays null unless the column really arrives as a Boolean. Turning an unrecognised option
+value into `true` would invent a fact the source never stated.
 
 ### Coverage limits this slice must keep admitting
 

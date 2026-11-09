@@ -128,8 +128,9 @@ namespace AutomationMonitor.Core.Services
             catch (Exception error)
             {
                 ProviderResultState state = ProviderErrorClassifier.Classify(error.GetType().Name, error.Message);
+                bool local = ProviderErrorClassifier.IsLocalDefect(error.GetType().Name, error.Message);
                 string reason = DiagnosticsSanitizer.Describe(
-                    ProviderErrorClassifier.AdviceFor(state),
+                    ProviderErrorClassifier.AdviceFor(state, local),
                     DiagnosticsSanitizer.Sanitize(error.Message));
                 return new MembershipEvidence(solutionId, null, state, null, 0, 0, checkedAtUtc, reason);
             }

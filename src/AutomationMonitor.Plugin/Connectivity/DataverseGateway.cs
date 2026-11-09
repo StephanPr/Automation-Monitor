@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Threading;
 using AutomationMonitor.Core.Models;
 using AutomationMonitor.Core.Providers.Dataverse;
@@ -232,7 +231,10 @@ namespace AutomationMonitor.Plugin.Connectivity
                     ParentRunId = GetString(entity, DataverseSchema.RunParentRunId),
                     CorrelationId = GetString(entity, DataverseSchema.RunClientTrackingId),
                     PrimaryRunCode = GetInt(entity, DataverseSchema.RunIsPrimary),
-                    PrimaryRunFlag = GetBool(entity, DataverseSchema.RunIsPrimary),
+                    // isprimary is a Picklist, so the numeric option is the evidence and the Boolean
+                    // field stays null unless the column really is a Boolean. Turning an unrecognised
+                    // option value into true would invent a fact the source never stated.
+                    PrimaryRunFlag = DataverseValue.AsBooleanWhenBoolean(Unwrap(entity, DataverseSchema.RunIsPrimary)),
                     TriggerType = GetString(entity, DataverseSchema.RunTriggerType)
                 });
             }
@@ -259,112 +261,71 @@ namespace AutomationMonitor.Plugin.Connectivity
             }
         }
         /// <summary>
-        /// Attribute readers below tolerate the shapes Dataverse actually returns: option sets for
-        /// choice columns, and a missing column as null rather than a fabricated default.
+        /// The readers below are thin on purpose: this gateway reduces the SDK's shapes to a plain CLR
+        /// value with <see cref="Unwrap"/>, and the core decides what that value means - including
+        /// refusing to guess when a column arrives in a shape this tool does not understand.
         /// </summary>
         private static string? GetString(Entity entity, string attribute)
         {
-            object? raw = Unwrap(entity, attribute);
-            string? text = raw as string;
-            return string.IsNullOrWhiteSpace(text) ? null : text;
+            return DataverseValue.AsText(Unwrap(entity, attribute), attribute);
         }
 
         private static int? GetInt(Entity entity, string attribute)
         {
-            object? raw = Unwrap(entity, attribute);
-            OptionSetValue? option = raw as OptionSetValue;
-            if (option != null)
-            {
-                return option.Value;
-            }
-
-            if (raw is int)
-            {
-                return (int)raw;
-            }
-
-            if (raw is long)
-            {
-                return checked((int)(long)raw);
-            }
-
-            return null;
+            return DataverseValue.AsInt32(Unwrap(entity, attribute), attribute);
         }
 
         private static bool? GetBool(Entity entity, string attribute)
         {
-            object? raw = Unwrap(entity, attribute);
-            if (raw is bool)
-            {
-                return (bool)raw;
-            }
-
-            return null;
+            return DataverseValue.AsBoolean(Unwrap(entity, attribute), attribute);
         }
 
         private static DateTimeOffset? GetUtc(Entity entity, string attribute)
         {
-            object? raw = Unwrap(entity, attribute);
-            if (raw is DateTime)
-            {
-                // Dataverse persists these instants in UTC and hands them back with Kind Unspecified.
-                return new DateTimeOffset(DateTime.SpecifyKind((DateTime)raw, DateTimeKind.Utc));
-            }
-
-            if (raw is DateTimeOffset)
-            {
-                // A reader that already resolved the offset is normalised to UTC, not trusted as local.
-                return new DateTimeOffset(((DateTimeOffset)raw).ToUniversalTime().UtcDateTime, TimeSpan.Zero);
-            }
-
-            return null;
+            return DataverseValue.AsUtc(Unwrap(entity, attribute), attribute);
         }
 
         /// <summary>
         /// BigInt reader. Dataverse returns a BigInt column as <see cref="long"/>, so an Int32 read
-        /// would throw on a long-running flow; the value stays milliseconds because the column
+        /// would overflow on a long-running flow; the value stays milliseconds because the column
         /// (schema name <c>DurationInMs</c>) is milliseconds.
         /// </summary>
         private static long? GetLong(Entity entity, string attribute)
         {
-            object? raw = Unwrap(entity, attribute);
-            if (raw is long)
-            {
-                return (long)raw;
-            }
-
-            if (raw is int)
-            {
-                return (int)raw;
-            }
-
-            if (raw is decimal)
-            {
-                return (long)(decimal)raw;
-            }
-
-            string? text = raw as string;
-            if (text != null)
-            {
-                long parsed;
-                if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed))
-                {
-                    return parsed;
-                }
-            }
-
-            return null;
+            return DataverseValue.AsInt64(Unwrap(entity, attribute), attribute);
         }
 
         private static object? Unwrap(Entity entity, string attribute)
         {
             if (!entity.Contains(attribute))
             {
+                // A column the environment did not return is "not stated", never a fabricated default.
                 return null;
             }
 
-            AliasedValue? aliased = entity.GetAttributeValue<AliasedValue>(attribute);
-            return aliased == null ? entity[attribute] : aliased.Value;
+            object? value = entity[attribute];
+
+            // Type tests, never a cast. The SDK's typed accessor casts, so asking it for an
+            // AliasedValue on any ordinary column throws InvalidCastException ("Unable to cast object
+            // of type 'System.String' to type 'Microsoft.Xrm.Sdk.AliasedValue'") - the exact failure
+            // the first real Windows session hit, because a query with no joins legitimately returns
+            // plain root values. Proven against the assembly the host loads; see
+            // docs/provider-capabilities.md.
+            AliasedValue? aliased = value as AliasedValue;
+            if (aliased != null)
+            {
+                value = aliased.Value;
+            }
+
+            // An option set is a wrapper around its integer value, not a value of its own; the core
+            // reader sees plain CLR shapes and owns every decision about what they mean.
+            OptionSetValue? option = value as OptionSetValue;
+            if (option != null)
+            {
+                value = option.Value;
+            }
+
+            return value;
         }
     }
 }

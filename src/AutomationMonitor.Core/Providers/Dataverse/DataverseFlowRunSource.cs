@@ -195,8 +195,9 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         private ProviderResult<T> Fail<T>(Exception error, int pagesRead)
         {
             ProviderResultState state = ProviderErrorClassifier.Classify(error.GetType().Name, error.Message);
+            bool local = ProviderErrorClassifier.IsLocalDefect(error.GetType().Name, error.Message);
             string reason = DiagnosticsSanitizer.Sanitize(error.Message);
-            string message = DiagnosticsSanitizer.Describe(RunReadAdviceFor(state), reason);
+            string message = DiagnosticsSanitizer.Describe(RunReadAdviceFor(state, local), reason);
             DateTimeOffset checkedAtUtc = clock.UtcNow;
 
             switch (state)
@@ -215,8 +216,13 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         /// absent run table is usually an ingestion or retention setting, and that difference is
         /// what makes an empty grid explainable instead of mysterious.
         /// </summary>
-        private static string RunReadAdviceFor(ProviderResultState state)
+        private static string RunReadAdviceFor(ProviderResultState state, bool isLocalDefect)
         {
+            if (isLocalDefect)
+            {
+                return ProviderErrorClassifier.AdviceFor(state, true);
+            }
+
             switch (state)
             {
                 case ProviderResultState.Unauthorized:

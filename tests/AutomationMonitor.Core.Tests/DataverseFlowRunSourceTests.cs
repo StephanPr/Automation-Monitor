@@ -217,6 +217,24 @@ public class DataverseFlowRunSourceTests
         Assert.Contains("solution-aware", absent.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// WF-A on the run path: a column this build cannot map is a defect here, not the run table being
+    /// absent and not an environment that failed to answer. The two wordings must not be confused.
+    /// </summary>
+    [Fact]
+    public void AColumnThisBuildCannotMapIsNotReportedAsAnAbsentRunTable()
+    {
+        ProviderResult<RunReadResult> local = Source(new FakeRunRowSource { ThrowOnRead = new DataverseMappingException("starttime", "a date and time", "String") })
+            .GetRunRead(FakeRunRowSource.Key(), null, Query(FakeRunRowSource.Key()), CancellationToken.None);
+
+        Assert.Equal(ProviderResultState.Unsupported, local.State);
+        Assert.False(local.IsUsable);
+        Assert.Contains("Automation Monitor could not read a value", local.Message, StringComparison.Ordinal);
+        Assert.Contains("starttime", local.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("does not expose the flow run table", local.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("did not answer", local.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void TheFailureMessageIsSanitizedAndNeverCarriesAUrlOrAToken()
     {

@@ -3,12 +3,17 @@ param(
     [string]$XrmToolBoxDirectory,
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
+    # XrmToolBox storage root (the folder containing Plugins). Only needed when the host keeps its
+    # tools somewhere other than next to the exe: a plain install stores them in
+    # %APPDATA%\MscrmTools\XrmToolBox, while /overridepath:. keeps them beside the exe.
+    [string]$StorageRoot,
     [switch]$Launch
 )
 
 <#
-    Developer deploy into a local XrmToolBox installation (storage next to the exe,
-    as started with /overridepath:).
+    Developer deploy into a local XrmToolBox installation. Storage is beside the exe for a
+    host started with /overridepath:.; a default install keeps it in %APPDATA%, which is
+    what -StorageRoot is for.
 
     This is deliberately NOT a second installation implementation. It stages a
     plugin.manifest.json beside a copy of the build output and then runs the very
@@ -77,9 +82,27 @@ $manifest = [ordered]@{
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $payload 'plugin.manifest.json') -Encoding UTF8
 
 Write-Host "Staging developer deployment from $outputDir"
+
+# Storage resolution stays the installer's job. A root is passed only when the caller named one
+# or this folder really is a storage root (the /overridepath:. layout); otherwise Install.ps1
+# applies its own %APPDATA%\MscrmTools\XrmToolBox default.
+$target = $StorageRoot
+if (!$target -and (Test-Path (Join-Path $XrmToolBoxDirectory 'Plugins'))) {
+    $target = $XrmToolBoxDirectory
+}
+if ($target) {
+    Write-Host ("Targeting XrmToolBox storage {0}" -f [System.IO.Path]::GetFullPath($target))
+} else {
+    Write-Host 'No Plugins folder beside the exe; using the default XrmToolBox storage resolved by the installer'
+}
+
 # Same entry point a user gets, in its own process so the installer's exit code is
 # the thing being checked rather than a side effect of dot-sourcing.
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -StorageRoot $XrmToolBoxDirectory -PackageRoot $staging
+$installerArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installer, '-PackageRoot', $staging)
+if ($target) {
+    $installerArgs += @('-StorageRoot', $target)
+}
+& powershell.exe @installerArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Installation failed with exit code $LASTEXITCODE."
 }

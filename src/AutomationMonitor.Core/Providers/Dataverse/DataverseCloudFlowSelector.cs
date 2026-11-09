@@ -17,11 +17,13 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             List<WorkflowReference> flows = new List<WorkflowReference>();
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
             SortedDictionary<int, int> categories = new SortedDictionary<int, int>();
+            SortedDictionary<WorkflowIdSource, int> sources = new SortedDictionary<WorkflowIdSource, int>();
             int rowsRead = 0;
             int duplicates = 0;
             int nonCloud = 0;
             int unknownCategory = 0;
             int missingId = 0;
+            int conflictingId = 0;
 
             if (records != null)
             {
@@ -31,17 +33,31 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
                     if (record == null)
                     {
+                        Note(sources, WorkflowIdSource.NotStated);
                         missingId++;
                         continue;
                     }
 
                     // Tally what the environment really sent before any row is excluded, so the
-                    // diagnostics describe the source and not this selection.
+                    // diagnostics describe the source and not this selection. The identity source is
+                    // recorded the same way: when the list is empty, "the id never arrived" and "this
+                    // solution has no cloud flows" must stay two different answers.
+                    Note(sources, record.IdSource);
+
                     if (record.RawCategory.HasValue)
                     {
                         int seenCount;
                         categories.TryGetValue(record.RawCategory.Value, out seenCount);
                         categories[record.RawCategory.Value] = seenCount + 1;
+                    }
+
+                    // Two ids on one row that do not match is not a row this tool can name: the reader
+                    // already refused to choose, and choosing here would put a second identity rule
+                    // beside WorkflowIdentity. The row is counted and dropped.
+                    if (record.IdSource == WorkflowIdSource.Conflicting)
+                    {
+                        conflictingId++;
+                        continue;
                     }
 
                     WorkflowKey? probe;
@@ -99,7 +115,30 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                     category.Key.ToString(CultureInfo.InvariantCulture) + " x" + category.Value.ToString(CultureInfo.InvariantCulture));
             }
 
-            return new CloudFlowSelectionResult(flows, rowsRead, duplicates, nonCloud, unknownCategory, missingId, categoryValues);
+            List<string> identitySources = new List<string>();
+            foreach (KeyValuePair<WorkflowIdSource, int> source in sources)
+            {
+                identitySources.Add(
+                    WorkflowIdentity.Describe(source.Key) + " x" + source.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return new CloudFlowSelectionResult(
+                flows,
+                rowsRead,
+                duplicates,
+                nonCloud,
+                unknownCategory,
+                missingId,
+                conflictingId,
+                categoryValues,
+                identitySources);
+        }
+
+        private static void Note(SortedDictionary<WorkflowIdSource, int> sources, WorkflowIdSource source)
+        {
+            int count;
+            sources.TryGetValue(source, out count);
+            sources[source] = count + 1;
         }
     }
 }

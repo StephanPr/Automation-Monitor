@@ -219,6 +219,62 @@ public class DataverseValueTests
     /// referenced from a net10.0 test - see docs/provider-capabilities.md for the probe that exercises
     /// the real adapter on .NET Framework.
     /// </summary>
+    /// <summary>
+    /// Identity columns are read with <see cref="DataverseValue.AsGuid"/>. An absent value states nothing
+    /// and an all-zero GUID is returned as it arrived - the identity rule decides that an empty id is not an
+    /// id - but a value that is not an identifier at all is a defect: quietly blanking it is how a flow list
+    /// ends up empty with a Complete result on screen.
+    /// </summary>
+    [Fact]
+    public void GuidIdentifierColumn_IsReturnedAsItStatedEvenWhenZero()
+    {
+        Guid id = Guid.Parse("12121212-3434-5656-7878-989898989898");
+
+        Assert.Equal(id, DataverseValue.AsGuid(id, "workflowid"));
+        Assert.Equal(Guid.Empty, DataverseValue.AsGuid(Guid.Empty, "workflowid"));
+    }
+
+    [Theory]
+    [InlineData("{12121212-3434-5656-7878-989898989898}")]
+    [InlineData("12121212-3434-5656-7878-989898989898")]
+    [InlineData("  12121212-3434-5656-7878-989898989898  ")]
+    [InlineData("12121212343456567878989898989898")]
+    public void TextIdentifierColumn_IsParsedBecauseSpellingIsNotMeaning(string value)
+    {
+        Guid id = Guid.Parse("12121212-3434-5656-7878-989898989898");
+
+        Assert.Equal(id, DataverseValue.AsGuid(value, "workflowid"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AbsentOrBlankIdentifier_IsNotStatedRatherThanAnEmptyId(string? value)
+    {
+        Assert.Null(DataverseValue.AsGuid(value, "workflowid"));
+    }
+
+    [Fact]
+    public void TextThatIsNotAnIdentifier_NamesTheColumnInsteadOfVanishing()
+    {
+        DataverseMappingException error = Assert.Throws<DataverseMappingException>(
+            () => DataverseValue.AsGuid("flow-42", "workflowid"));
+
+        Assert.Equal("workflowid", error.Attribute);
+        Assert.Equal("String", error.ActualType);
+        Assert.Contains("workflowid", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnyOtherClrType_NamesTheShapeItArrivedIn()
+    {
+        DataverseMappingException error = Assert.Throws<DataverseMappingException>(
+            () => DataverseValue.AsGuid(42L, "workflowid"));
+
+        Assert.Equal("Int64", error.ActualType);
+    }
+
     private static class AliasedValueProbe
     {
         public static object? Unwrap(object? wrapped)

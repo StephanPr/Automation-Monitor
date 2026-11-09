@@ -12,9 +12,18 @@ public class DataverseCloudFlowSelectorTests
 {
     private const string EnvironmentId = "55555555-5555-5555-5555-555555555555";
 
-    private static RawWorkflowRecord Row(string? id, int? category, string? name = "flow", int? state = DataverseSchema.StateCodeEnabled)
+    /// <param name="source">
+    /// Where the row's id came from, exactly as the reader reports it. The default is the honest "not
+    /// stated", which is what a row that carried nothing at all looks like.
+    /// </param>
+    private static RawWorkflowRecord Row(
+        string? id,
+        int? category,
+        string? name = "flow",
+        int? state = DataverseSchema.StateCodeEnabled,
+        WorkflowIdSource source = WorkflowIdSource.NotStated)
     {
-        return new RawWorkflowRecord { Id = id, RawCategory = category, Name = name, RawStateCode = state };
+        return new RawWorkflowRecord { Id = id, IdSource = source, RawCategory = category, Name = name, RawStateCode = state };
     }
 
     private static List<RawWorkflowRecord> Rows(params RawWorkflowRecord[] records)
@@ -191,5 +200,137 @@ public class DataverseCloudFlowSelectorTests
             null);
 
         Assert.NotEqual(scoped.Flows[0].Key.Canonical, unscoped.Flows[0].Key.Canonical);
+    }
+
+    /// <summary>
+    /// The observed failure reproduced as data: a solution whose read returned 59 rows and in which every
+    /// row carried no identity anywhere (a distinct query suppresses primary key values, and the identity
+    /// column was not projected). The rule protected here is that all 59 are counted and none is given a
+    /// substitute key - an invented id would put 59 unnameable flows into a saved watchlist.
+    /// </summary>
+    [Fact]
+    public void EveryRowWithoutAnyIdentity_IsCountedAndNoneIsInvented()
+    {
+        List<RawWorkflowRecord> rows = new List<RawWorkflowRecord>();
+        for (int i = 0; i < 59; i++)
+        {
+            rows.Add(Row(null, DataverseSchema.WorkflowCategoryCloudFlow, "flow " + i));
+        }
+
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(rows, EnvironmentId);
+
+        Assert.Equal(59, result.RowsRead);
+        Assert.Empty(result.Flows);
+        Assert.Equal(59, result.MissingIdCount);
+        Assert.Equal("0 cloud flow(s) - 59 row(s) without an id skipped", result.DescribeCoverage());
+        Assert.Contains(
+            "identity sources: no workflowid and no row id x59",
+            result.DescribeDiagnostics(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IdentityFromTheProjectedColumn_IsKeptAndReportedAsTheColumn()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(
+            Rows(Row(
+                "aaaaaaaa-0000-0000-0000-000000000009",
+                DataverseSchema.WorkflowCategoryCloudFlow,
+                "From the column",
+                source: WorkflowIdSource.IdColumn)),
+            EnvironmentId);
+
+        Assert.Single(result.Flows);
+        Assert.Equal(0, result.MissingIdCount);
+        Assert.Equal("aaaaaaaa-0000-0000-0000-000000000009", result.Flows[0].WorkflowId);
+        Assert.Contains("workflowid column x1", result.DescribeDiagnostics(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IdentityFromTheRowId_IsKeptForAReaderThatProjectsNoColumn()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(
+            Rows(Row(
+                "bbbbbbbb-0000-0000-0000-000000000009",
+                DataverseSchema.WorkflowCategoryCloudFlow,
+                "From the row id",
+                source: WorkflowIdSource.RowId)),
+            EnvironmentId);
+
+        Assert.Single(result.Flows);
+        Assert.Contains("row id x1", result.DescribeDiagnostics(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DiagnosticsReportNoIdentitySourcesOnlyWhenNoRowWasRead()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(null, EnvironmentId);
+
+        Assert.Contains("identity sources: none reported", result.DescribeDiagnostics(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Where a row's id came from must never split one flow into two entries: the same provider id read
+    /// through the row id and through the projected column is one workflow, and the second observation is a
+    /// duplicate. This is the guard against a second, source-specific identity path.
+    /// </summary>
+    [Fact]
+    public void TheSameFlowSeenThroughTwoIdentitySources_IsOneFlowNotTwo()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(
+            Rows(
+                Row("abababab-0000-0000-0000-000000000001", DataverseSchema.WorkflowCategoryCloudFlow, "Nightly", source: WorkflowIdSource.RowId),
+                Row("abababab-0000-0000-0000-000000000001", DataverseSchema.WorkflowCategoryCloudFlow, "Nightly", source: WorkflowIdSource.IdColumn)),
+            EnvironmentId);
+
+        Assert.Single(result.Flows);
+        Assert.Equal(1, result.DuplicateCount);
+        Assert.Equal(0, result.MissingIdCount);
+        Assert.Contains("1 duplicate(s) removed", result.DescribeCoverage(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two ids on one row that do not match is a row this tool cannot name. It is refused, and it is
+    /// counted under its own heading: reporting it as "without an id" would describe the symptom wrongly
+    /// and send the next reader looking for a missing column instead of a mismatched one.
+    /// </summary>
+    [Fact]
+    public void ARowWithTwoDifferentIds_IsRefusedAndCountedSeparately()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(
+            Rows(Row(null, DataverseSchema.WorkflowCategoryCloudFlow, "ambiguous", source: WorkflowIdSource.Conflicting)),
+            EnvironmentId);
+
+        Assert.Empty(result.Flows);
+        Assert.Equal(1, result.ConflictingIdCount);
+        Assert.Equal(0, result.MissingIdCount);
+        Assert.Contains("1 row(s) with conflicting ids skipped", result.DescribeCoverage(), StringComparison.Ordinal);
+        Assert.Contains("conflicting ids x1", result.DescribeDiagnostics(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A healthy read has to be explainable from the log alone, without a debugger and without the source:
+    /// one line carries the projection the query sent, the query shape and where each row's identity came
+    /// from. Column names and counts only - never a value.
+    /// </summary>
+    [Fact]
+    public void DiagnosticsNameTheProjectionTheQueryShapeAndTheIdentitySources()
+    {
+        CloudFlowSelectionResult result = DataverseCloudFlowSelector.Select(
+            Rows(
+                Row("11111111-0000-0000-0000-000000000001", DataverseSchema.WorkflowCategoryCloudFlow, "One", source: WorkflowIdSource.IdColumn),
+                Row("22222222-0000-0000-0000-000000000002", DataverseSchema.WorkflowCategoryCloudFlow, "Two", source: WorkflowIdSource.AliasedIdColumn)),
+            EnvironmentId);
+
+        string diagnostics = result.DescribeDiagnostics();
+
+        Assert.Contains("asked for columns: workflowid, name, category", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("identity column 'workflowid' projected: yes", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("distinct query: no", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("scope: workflow rows joined to solutioncomponent componenttype 29", diagnostics, StringComparison.Ordinal);
+        Assert.Contains(
+            "identity sources: workflowid column x1, aliased workflowid column x1",
+            diagnostics,
+            StringComparison.Ordinal);
     }
 }

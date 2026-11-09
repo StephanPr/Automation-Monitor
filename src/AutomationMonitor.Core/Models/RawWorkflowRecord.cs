@@ -14,6 +14,14 @@ namespace AutomationMonitor.Core.Models
         /// <summary>Provider's stable workflow id. Null or blank makes the row unusable.</summary>
         public string? Id { get; set; }
 
+        /// <summary>
+        /// Which value on the row supplied <see cref="Id"/>. Set by the reader, never inferred later: when a
+        /// list comes back empty this is the difference between "the environment has no flows" and "the
+        /// query lost every id", and it is reported instead of guessed. A row that could not be identified
+        /// keeps <see cref="WorkflowIdSource.NotStated"/>.
+        /// </summary>
+        public WorkflowIdSource IdSource { get; set; }
+
         /// <summary>Display name. Presentation and search only; never identity.</summary>
         public string? Name { get; set; }
 

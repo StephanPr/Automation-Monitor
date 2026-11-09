@@ -21,6 +21,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         private const string WholeNumberExpected = "a whole number";
         private const string BooleanExpected = "a true or false value";
         private const string DateExpected = "a date and time";
+        private const string IdentifierExpected = "an identifier";
 
         /// <summary>
         /// Text column. An absent, null or blank value is "not stated" rather than an empty string, so
@@ -124,6 +125,52 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             }
 
             throw Unexpected(attribute, DateExpected, value);
+        }
+
+        /// <summary>
+        /// Identifier column (<c>Uniqueidentifier</c>): the shape a workflow's identity arrives in.
+        ///
+        /// <para>
+        /// Absent or blank is "the source did not state an id", which the caller must count and report.
+        /// A <see cref="Guid.Empty"/> is returned as itself rather than as null: it is a value the source
+        /// did send, and only the caller knows whether an empty identity means "not stated" or "refuse the
+        /// row" (see <see cref="WorkflowIdentity"/>).
+        /// </para>
+        /// <para>
+        /// Unlike the optional columns, a text value that is not an identifier is a defect and not a blank:
+        /// silently returning null here is what let a whole flow list disappear one attribute at a time.
+        /// Identity keys merging, run filtering and saved watchlists, so an unrecognised shape is named -
+        /// column and CLR type only - and never guessed into a plausible value.
+        /// </para>
+        /// </summary>
+        public static Guid? AsGuid(object? value, string attribute)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            if (value is Guid)
+            {
+                return (Guid)value;
+            }
+
+            string? text = value as string;
+            if (text != null)
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return null;
+                }
+
+                Guid parsed;
+                if (Guid.TryParse(text.Trim(), out parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            throw Unexpected(attribute, IdentifierExpected, value);
         }
 
         private static long? AsWholeNumber(object? value, string attribute)

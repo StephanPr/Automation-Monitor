@@ -20,7 +20,9 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             int nonCloudCount,
             int unknownCategoryCount,
             int missingIdCount,
-            IReadOnlyList<string> categoryValues)
+            int conflictingIdCount,
+            IReadOnlyList<string> categoryValues,
+            IReadOnlyList<string> identitySources)
         {
             Flows = flows;
             RowsRead = rowsRead;
@@ -28,7 +30,9 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             NonCloudCount = nonCloudCount;
             UnknownCategoryCount = unknownCategoryCount;
             MissingIdCount = missingIdCount;
+            ConflictingIdCount = conflictingIdCount;
             CategoryValues = categoryValues;
+            IdentitySources = identitySources;
         }
 
         /// <summary>Unique cloud flows, ordered by name for a stable grid.</summary>
@@ -50,12 +54,28 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         public int MissingIdCount { get; }
 
         /// <summary>
+        /// Rows that carried two different ids (a row id and an identity column that disagree). They are
+        /// excluded because choosing between them would attach runs, filters and saved watchlists to a flow
+        /// this tool cannot prove; the count keeps that refusal visible instead of quiet.
+        /// </summary>
+        public int ConflictingIdCount { get; }
+
+        /// <summary>
         /// The distinct <c>category</c> values the rows actually carried, ascending, with how many rows
         /// carried each. Diagnostic only: it is what settles whether
         /// <see cref="DataverseSchema.WorkflowCategoryCloudFlow"/> is the right selector in a given
         /// environment, which no build can decide from its own machine. Codes, never names or ids.
         /// </summary>
         public IReadOnlyList<string> CategoryValues { get; }
+
+        /// <summary>
+        /// How many rows took their identity from where, e.g. <c>workflowid column x59</c>. Diagnostic
+        /// only, and the reason the projection and the row id are both recorded per row: it is the single
+        /// line that separates "the environment has no flows here" from "the query did not carry the id",
+        /// which is the difference between an empty solution and a broken read. Column names and counts
+        /// only - never an id value.
+        /// </summary>
+        public IReadOnlyList<string> IdentitySources { get; }
 
         /// <summary>True when the solution had workflow components but none of them were cloud flows.</summary>
         public bool HasWorkflowComponentsWithoutCloudFlows
@@ -76,6 +96,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             Append(text, "row(s) with unknown category skipped", UnknownCategoryCount);
             Append(text, "duplicate(s) removed", DuplicateCount);
             Append(text, "row(s) without an id skipped", MissingIdCount);
+            Append(text, "row(s) with conflicting ids skipped", ConflictingIdCount);
 
             return text.ToString();
         }
@@ -92,7 +113,29 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             text.Append("Automation Monitor diagnostic - asked for columns: ")
                 .Append(string.Join(", ", DataverseSchema.WorkflowAttributes))
                 .Append("; rows read: ").Append(RowsRead.ToString(CultureInfo.InvariantCulture))
-                .Append("; cloud flow selector value: ").Append(DataverseSchema.WorkflowCategoryCloudFlow.ToString(CultureInfo.InvariantCulture));
+                .Append("; cloud flow selector value: ").Append(DataverseSchema.WorkflowCategoryCloudFlow.ToString(CultureInfo.InvariantCulture))
+                .Append("; scope: workflow rows joined to solutioncomponent componenttype ")
+                .Append(DataverseSchema.ComponentTypeWorkflow.ToString(CultureInfo.InvariantCulture));
+
+            // Read from the projection itself instead of from a second copy of the answer: a diagnostic
+            // that restates the query can lie about it, and this line is the only evidence a maintainer
+            // gets without the source.
+            bool identityProjected = System.Array.IndexOf(DataverseSchema.WorkflowAttributes, DataverseSchema.WorkflowId) >= 0;
+            text.Append("; identity column '")
+                .Append(DataverseSchema.WorkflowId)
+                .Append("' projected: ")
+                .Append(identityProjected ? "yes" : "no")
+                .Append("; distinct query: ")
+                .Append(DataverseSchema.WorkflowQueryDistinct ? "yes" : "no");
+
+            if (IdentitySources.Count == 0)
+            {
+                text.Append("; identity sources: none reported");
+            }
+            else
+            {
+                text.Append("; identity sources: ").Append(string.Join(", ", IdentitySources));
+            }
 
             if (CategoryValues.Count == 0)
             {
@@ -106,6 +149,11 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             if (UnknownCategoryCount > 0)
             {
                 text.Append("; rows with no category: ").Append(UnknownCategoryCount.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (ConflictingIdCount > 0)
+            {
+                text.Append("; rows with two different ids: ").Append(ConflictingIdCount.ToString(CultureInfo.InvariantCulture));
             }
 
             return text.ToString();

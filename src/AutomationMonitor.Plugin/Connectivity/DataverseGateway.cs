@@ -112,7 +112,15 @@ namespace AutomationMonitor.Plugin.Connectivity
             // undocumented column. primarycategory/secondarycategory were removed for exactly that
             // reason - see DataverseSchema.WorkflowAttributes and docs/provider-capabilities.md.
             query.ColumnSet = new ColumnSet(DataverseSchema.WorkflowAttributes);
-            query.Distinct = true;
+
+            // Never a bare `true`. Microsoft Learn, remarks on QueryExpression.Distinct: "When the Distinct
+            // property is true, the results returned don't include primary key values for each record" - and
+            // the primary key of this table is the flow's identity. With it true, every row of the first live
+            // session came back with an empty Entity.Id and the operator saw "0 cloud flow(s) - 59 row(s)
+            // without an id skipped". The rows this flag appeared to deduplicate are collapsed in Core
+            // (DataverseCloudFlowSelector on the WorkflowKey), where a removal is counted and shown instead
+            // of disappearing into the query.
+            query.Distinct = DataverseSchema.WorkflowQueryDistinct;
             query.AddOrder(DataverseSchema.WorkflowName, OrderType.Ascending);
 
             // The join is the solution-aware scope: workflows referenced as workflow components
@@ -136,9 +144,20 @@ namespace AutomationMonitor.Plugin.Connectivity
             List<RawWorkflowRecord> records = new List<RawWorkflowRecord>();
             foreach (Entity entity in rows.Entities)
             {
+                // Identity is the core's decision, not this adapter's: it is given the projected
+                // workflowid (unwrapped, and tagged when it arrived aliased) plus the row id, and it refuses
+                // a row rather than pick between two disagreeing ids. The record then carries the source, so
+                // an empty grid can be explained from the log without a debugger.
+                bool idWasAliased;
+                object? projectedId = Unwrap(entity, DataverseSchema.WorkflowId, out idWasAliased);
+                string? identity;
+                WorkflowIdSource identitySource;
+                WorkflowIdentity.TryResolve(projectedId, entity.Id, idWasAliased, out identity, out identitySource);
+
                 records.Add(new RawWorkflowRecord
                 {
-                    Id = entity.Id == Guid.Empty ? null : entity.Id.ToString("D"),
+                    Id = identity,
+                    IdSource = identitySource,
                     Name = GetString(entity, DataverseSchema.WorkflowName),
                     RawCategory = GetInt(entity, DataverseSchema.WorkflowCategory),
                     RawStateCode = GetInt(entity, DataverseSchema.WorkflowStateCode),
@@ -292,6 +311,18 @@ namespace AutomationMonitor.Plugin.Connectivity
 
         private static object? Unwrap(Entity entity, string attribute)
         {
+            bool ignored;
+            return Unwrap(entity, attribute, out ignored);
+        }
+
+        /// <summary>
+        /// The overload the identity rule needs: whether a value arrived wrapped in an alias is a fact worth
+        /// reporting, because a query with a join can alias every column it returns and a reader that only
+        /// understands the plain shape would lose the id without noticing.
+        /// </summary>
+        private static object? Unwrap(Entity entity, string attribute, out bool wasAliased)
+        {
+            wasAliased = false;
             if (!entity.Contains(attribute))
             {
                 // A column the environment did not return is "not stated", never a fabricated default.
@@ -310,6 +341,7 @@ namespace AutomationMonitor.Plugin.Connectivity
             if (aliased != null)
             {
                 value = aliased.Value;
+                wasAliased = true;
             }
 
             // An option set is a wrapper around its integer value, not a value of its own; the core

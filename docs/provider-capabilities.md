@@ -27,12 +27,15 @@ against a live environment. Every claim below names its evidence. Product behavi
   by `friendlyname`, paged at 250 rows.
 - Flows of one solution: `QueryExpression("workflow")` with an inner `LinkEntity` to
   `solutioncomponent` on `workflow.workflowid = solutioncomponent.objectid`, filtered by
-  `componenttype = 29` and `solutionid = <selected>`, `Distinct = true`, paged at 250 rows.
+  `componenttype = 29` and `solutionid = <selected>`, paged at 250 rows. `Distinct` is **false**, and it
+  has to stay that way — see "Identity" below, which is this provider's second live defect.
   `category` is deliberately **not** filtered so the excluded classic workflows can be counted
   and reported instead of disappearing.
-- The flow projection is exactly `DataverseSchema.WorkflowAttributes`: seven logical names, each one read
-  by a decision or by the grid. Nothing speculative is added, because an unknown column is not a missing
-  cell - it is a rejected query and an empty list, as the first live session proved.
+- The flow projection is exactly `DataverseSchema.WorkflowAttributes`: eight logical names, each one read
+  by a decision or by the grid. The first is `workflowid` — the table's documented primary id attribute and
+  the identity of every flow — because a projection that leaves the id out makes the read depend on a
+  query-shape side effect. Nothing speculative is added: an unknown column is not a missing cell, it is a
+  rejected query and an empty list, as the first live session proved.
 - Only `IOrganizationService.RetrieveMultiple` is called anywhere in the plugin.
 
 ### How a returned row becomes model data (measured client-side 2026-11-09)
@@ -53,6 +56,38 @@ Two stages, and the split is deliberate because the second one is what unit test
 Consequence for `flowrun`: `isprimary` is a Picklist, so the numeric option is the evidence and the
 boolean field stays null unless the column really arrives as a Boolean. Turning an unrecognised option
 value into `true` would invent a fact the source never stated.
+
+### Identity: which value is a flow's id (second live defect, 2026-11-09)
+
+The rerun after the projection fix answered the query and returned rows — 59 of them for one solution —
+and the grid still said `0 cloud flow(s) - 59 row(s) without an id skipped`. Nothing was wrong with the
+data; the query was throwing the identity away twice over:
+
+| Fact | Source |
+|---|---|
+| `workflowid` is the primary id attribute of the `workflow` table. | Microsoft Learn, workflow entity reference (`PrimaryIdAttribute`). |
+| A distinct `QueryExpression` returns **no primary key values** for each record. | Microsoft Learn, `QueryExpression.Distinct` remarks: "When the Distinct property is true, the results returned don't include primary key values for each record because they represent an aggregation of all the distinct values." |
+| The discovery query set `Distinct = true` **and** did not project `workflowid`; its link-entity asked for `ColumnSet(false)`, so `solutioncomponent.objectid` was not returned either. | `DataverseGateway` before this change, confirmed by reading the query side by side with the observed `Entity.Id == Guid.Empty` symptom. |
+
+So every row arrived with an empty row id and no id column to read, `WorkflowKey.TryCreate` refused all
+59, and the coverage line reported it honestly while the read itself still claimed `Complete`. The fix is
+the pair: project `workflowid` (the documented primary id) and stop asking for distinct rows
+(`DataverseSchema.WorkflowQueryDistinct = false`), with `WorkflowIdentity` in the core deciding the value
+and `DataverseCloudFlowSelector` collapsing duplicates where the count is visible.
+
+Three ids on this path that look interchangeable and are not:
+
+- `workflow.workflowid` — the table's primary id, and the identity this tool keys on
+  (`WorkflowKey` = provider + environment + this value).
+- `workflow.workflowidunique` — a different column on the same table. Neither projected nor read, and no
+  claim is made here about what it holds; it is named only so nobody substitutes it for the primary id.
+- `solutioncomponent.objectid` — the component's reference to the workflow. The join
+  `workflow.workflowid = solutioncomponent.objectid` matched 59 rows on a real tenant, which is the
+  observed evidence that it carries the same primary id for `componenttype = 29`. It is still never used
+  as identity: it is the join key, not the read.
+
+The general rule taken from this: **never let identity depend on a query flag.** Project the documented id
+column, and refuse a row rather than fall back to anything name-like or adjacent.
 
 ### Coverage limits this slice must keep admitting
 
@@ -93,16 +128,20 @@ or payload were recorded; only column behaviour and coverage, which is what this
 |---|---|
 | 1 | Partly answered. The solution read succeeded end to end: `complete - 975 row(s) over 4 page(s)`, proving `solution.name`/`friendlyname` and the paging signal on a real tenant. Whether `ismanaged`, `version` and `uniquename` carry values is not yet visible in the UI (discovery shows the friendly name only). |
 | 2 | **Blocked, and the cause was ours.** The flow read was answered with `The 'workflow' entity doesn't contain attribute with Name = 'primarycategory'`, so Dataverse rejected the query and no workflow row reached the model. `primarycategory` was projected but never read; it is removed, and the session must be repeated. Nothing was learned about the count matching the portal or about classic-flow exclusion. |
+| 2 — rerun after that fix | The read succeeded and 59 workflow rows arrived for one solution, and **all 59 were skipped as "without an id"** — a second defect of ours, explained in "Identity" above: the query was `Distinct = true`, which Learn documents as returning no primary key values, and `workflowid` was not projected. Identity is now a projected column and the query is not distinct. **Whether those 59 rows are cloud flows, and how many are classic workflows, is still unanswered** — that needs the next session. |
 | 3 | Not reached for workflows. The solution side did page (4 pages, 975 rows) without looping or duplicating. |
 | 4 | Not exercised — the connection used had read access. |
 | 5 | Not answered: no flow row was returned, so no scoped key was built. |
 
-Two facts the session produced that no checklist item asked for: `WorkflowActivity` is absent from every
-environment tried (M7's blocker), and an unknown projected column fails the entire read rather than
-returning a blank cell. The second is why the projection is now a single named list with a guard test, and
-why an empty flow list also writes `DescribeDiagnostics()` to the XrmToolBox log — the projected columns,
-the row count and the distinct `category` values seen — so the next session can settle the `category = 5`
-question from one log line instead of another guess.
+Three facts the sessions produced that no checklist item asked for: `WorkflowActivity` is absent from every
+environment tried (M7's blocker); an unknown projected column fails the entire read rather than returning a
+blank cell; and a distinct query silently removes the primary key, which can empty a grid while the read
+still reports `Complete`. The second is why the projection is a single named list with a guard test. The
+third is why identity is a projected column *and* a per-row record of where the value came from: an empty or
+degraded flow list writes `DescribeDiagnostics()` to the XrmToolBox log — the projected columns, the row
+count, the selector value, whether `workflowid` was projected, whether the query was distinct, where each
+row's identity came from, and the distinct `category` values seen — so one session settles the identity
+question and the `category = 5` question from a single log line instead of another guess.
 
 ## Power Automate run history (`flowrun`) — M3
 
@@ -194,6 +233,13 @@ to an environment itself.
    (M3.10). Once measured, that gap belongs in the table above.
 8. Confirm a child-flow run carries `parentrunid` pointing at the parent run *name*. The whole
    correlation feature rests on that one fact.
+9. Confirm which workflow value `flowrun.workflowid` really holds: the `workflow` table's primary id
+   (`workflow.workflowid`) — which is what this tool uses as workflow identity and what the discovery join
+   matched — or the table's separate `workflowidunique`. The run query filters
+   `flowrun.workflowid = <the identity discovery produced>`, so if those two columns differ the symptom is a
+   run list that is empty for a flow the portal shows as having runs, which is a scope failure and not a
+   filtering bug. No answer is assumed in code: the filter value is exactly the discovery identity. This is
+   the first thing to settle before M3 is claimed against a tenant.
 
 ### Power Platform Flow Runs API — assessed, deliberately not used (M3.2)
 

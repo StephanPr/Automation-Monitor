@@ -80,9 +80,19 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         /// rather than optional. A guard test in DataverseSchemaTests refuses to let an undocumented
         /// name back in.
         /// </para>
+        ///
+        /// <para>
+        /// <c>workflowid</c> is in the list for the opposite reason: it is the documented primary id
+        /// attribute of the workflow table and it is the identity of every flow, so the read must state it
+        /// rather than depend on the row id the SDK happens to fill in. The same live session returned 59
+        /// rows whose row ids were all empty, because a distinct query does not carry primary key values
+        /// (see <see cref="WorkflowQueryDistinct"/>), and every row was then dropped as "without an id".
+        /// Identity is projected, and the guard test pins it here so a later cleanup cannot drop it again.
+        /// </para>
         /// </summary>
         public static readonly string[] WorkflowAttributes =
         {
+            WorkflowId,
             WorkflowName,
             WorkflowCategory,
             WorkflowStateCode,
@@ -91,6 +101,27 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             WorkflowCreatedOn,
             WorkflowModifiedOn
         };
+
+        /// <summary>
+        /// Whether the workflow discovery query asks the platform for distinct rows. It must stay
+        /// <c>false</c>.
+        ///
+        /// <para>
+        /// Microsoft Learn, remarks on <c>QueryExpression.Distinct</c>: "When the Distinct property is
+        /// true, the results returned don't include primary key values for each record because they
+        /// represent an aggregation of all the distinct values." Identity of a workflow <em>is</em> its
+        /// primary key, so a distinct query costs every row its id - the exact failure the first live
+        /// session hit on 2026-11-09, where a solution returned 59 rows and the grid said
+        /// "0 cloud flow(s) - 59 row(s) without an id skipped".
+        /// </para>
+        ///
+        /// <para>
+        /// The de-duplication this flag appeared to provide is done in Core instead
+        /// (<see cref="DataverseCloudFlowSelector"/> on the <c>WorkflowKey</c>), where removing a row is
+        /// counted and shown to the operator rather than absorbed invisibly by the query.
+        /// </para>
+        /// </summary>
+        public const bool WorkflowQueryDistinct = false;
 
         // ---- flowrun: execution history (M3) ------------------------------------------------
         //

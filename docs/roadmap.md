@@ -16,8 +16,8 @@ blamed a working connection. Rerunning flow discovery is the one gate still open
 
 | Area | State | Evidence layer |
 |---|---|---|
-| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 385 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after) |
-| M1 solution and cloud-flow discovery | Implemented in core and gateway; **WF-A cast fixed and confirmed live; projection defect fixed and awaiting rerun** | Mapping decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox, the flow read never returned a row |
+| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 421 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix) |
+| M1 solution and cloud-flow discovery | Implemented in core and gateway; **cast and projection defects confirmed live and fixed; the identity defect is fixed with a guard test and awaits its rerun** | Mapping and identity decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox; the flow read answered with 59 rows live but every one of them lost its id (AM-34), so **no flow row has been displayed yet** |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; no UI caller | Core layer only; never executed against a tenant |
 | M4 saved watchlists and settings | Core implemented (`a23f216`); plugin storage root and Watchlists view **paused** | Core layer only, against an in-memory file seam |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
@@ -58,9 +58,12 @@ Windows session records:
 4. layout at 100 / 150 / 200 percent scaling and keyboard navigation;
 5. anything that could not be exercised, named as unverified rather than assumed;
 6. for a list that came back empty or degraded, the diagnostic line the plugin writes to the XrmToolBox
-   log (`DescribeDiagnostics()`: the columns asked for, rows read, and the distinct `category` values
-   seen). It stays in the log by decision - the status line describes the environment, the log says what
-   this build asked for - so copy it back with the report.
+   log (`DescribeDiagnostics()`: the columns asked for, rows read, the cloud-flow selector value, whether
+   the identity column was projected, whether the query was distinct, where each row's identity came from,
+   and the distinct `category` values seen). It stays in the log by decision - the status line describes the
+   environment, the log says what this build asked for - so copy it back with the report. It is also written
+   when rows were dropped for missing or conflicting identity, which the status line can count but not
+   explain.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -90,11 +93,12 @@ work, so the deployed build was identified before anything was planned.
 | Host as measured 2026-11-09 | XrmToolBox 1.2026.9.78, Microsoft.Xrm.Sdk.dll 9.2.49.14828, PowerShell 5.1 |
 | Compile-time SDK reference | Microsoft.Xrm.Sdk 9.0.2.2 - a version-sensitive gap |
 
-### 4.2 The discovery failure: three defects, one trigger — the third only visible live
+### 4.2 The discovery failure: four defects, escalating visibility — the last two only visible live
 
 Measured on the primary host on 2026-11-09, against the `Microsoft.Xrm.Sdk.dll` copy this XrmToolBox
 install loads (assembly 9.0.0.0, file 9.2.49.14828), driven by a throwaway net48 harness that
-source-links the real `DataverseGateway.cs`. No tenant was involved.
+source-links the real `DataverseGateway.cs`. No tenant was involved in items 1 and 2; items 3 and 4
+could only be found by a real environment answering.
 
 1. **Trigger - confirmed.** `DataverseGateway.Unwrap` obtained every attribute through the generic
    accessor parameterised with `AliasedValue`. That accessor **throws** `InvalidCastException` for any
@@ -121,12 +125,26 @@ source-links the real `DataverseGateway.cs`. No tenant was involved.
    AM-33, `DataverseSchema.WorkflowAttributes` is the single workflow projection, the speculative columns
    and the unread model fields behind them are gone, and the classifier tells a rejected query apart
    from a misread value so neither can borrow the other's advice.
+4. **Identity discarded by the query - found live on the rerun the same day, fixed, rerun owed again.**
+   With the projection accepted, the flow read returned **59 rows** for one solution and the grid said
+   `0 cloud flow(s) - 59 row(s) without an id skipped`. The query set `Distinct = true`, which Learn
+   documents as returning no primary key values per record, and its projection never named `workflowid`;
+   the link-entity asked for `ColumnSet(false)`, so `solutioncomponent.objectid` was not there either.
+   Every `Entity.Id` therefore arrived as `Guid.Empty` and the gateway's only identity source was gone.
+   Note what this defect did *not* do: it did not lie about coverage. The rows really were returned, the
+   skips were counted and shown, and the state was `Complete` because the request had genuinely succeeded -
+   what was missing was any statement that the query had thrown the key away. The fix is the pair
+   (`workflowid` projected, `WorkflowQueryDistinct = false`) plus a rule that no longer trusts a single
+   source: `WorkflowIdentity` resolves the id (projected column first, row id as fallback, refusal when the
+   two disagree, an all-zero `Guid` never an id), each row records where its id came from, and
+   `DescribeDiagnostics()` reports the projection, the distinct flag and the source tally. The duplicates
+   `Distinct` appeared to remove are collapsed in Core, where removing one is counted and visible.
 
 ### 4.3 Phase verdicts against the current branch
 
 | Reported phase | Verdict | Why |
 |---|---|---|
-| A - discovery cast | **Fixed on the primary host and confirmed live (2026-11-09)** | Root cause reproduced against the host's own SDK assembly, adapter and classifier changed, 385 unit tests green, deployed through the shipped installer; the first live session read 975 solutions over 4 pages with the cast absent. Flows then failed on the rejected projection (WF-A.5), fixed the same day - rerunning flow discovery is the remaining gate |
+| A - discovery cast | **Fixed on the primary host and confirmed live (2026-11-09); the two defects behind it also fixed, rerun still owed** | Root cause reproduced against the host's own SDK assembly, adapter and classifier changed, 421 unit tests green, deployed through the shipped installer; the first live session read 975 solutions over 4 pages with the cast absent. Flows then failed on the rejected projection (WF-A.5), and after that fix on identity the query had discarded (WF-A.7) - both fixed the same day. **Rerunning flow discovery remains the gate**: no flow row has been displayed yet |
 | B - solution-independent browsing | **Valid, better prepared** | Normalization, category-5 selection, dedupe, paging and coverage exist and are tested; the solution-less query, the multi-select UI and the first portal deep link do not |
 | C - Azure Logic Apps discovery | **Valid, nothing exists** | The M3 rejection of the undocumented Power Platform run-list surface is the precedent to repeat |
 | D - modern UI feasibility | **Newly feasible** | XrmToolBox is installed on the primary host, so a proof of concept can be loaded and measured, not only compiled |
@@ -163,8 +181,9 @@ on Windows rather than as a pass.
 defect with an opposite cause; every message site now passes the kind, so the two can never share a
 sentence again |
 | WF-A.4 | Reproduce first: discovery fails at WF-A.1 or in XrmToolBox before the fix, and the same action succeeds after it. Record both results and the build identity of each DLL. | Windows gate | **Done at the harness layer, open at the tenant layer.** Pre-fix the harness throws on the first solution row; post-fix every case maps (solutions with sparse columns, workflows with option sets, runs with BigInt durations) and an unexpected type raises `DataverseMappingException`. Deployed build: ProductVersion `0.1.0+a2f32ebc468d40bc893e8c21e81c9b8ebe5f18aa` (Release), `Plugin.dll` 28160 bytes sha256 `c5725aa4…0117`, `Core.dll` 161280 bytes sha256 `9270c799…6a0e`, installed by `packaging\Install.ps1` into `%APPDATA%\MscrmTools\XrmToolBox\Plugins` with the previous copies backed up to `PluginBackups\AutomationMonitor\20261109-153539`. **The operator's discovery run against a real environment is still required** - see section 3. Partially met on 2026-11-09: solutions were observed complete; flows were not, for the WF-A.5 reason. That rerun is still owed after AM-33. Committed as `4be6992` and redeployed 2026-11-09 20:10 through `scripts\deploy.ps1 -Configuration Release -StorageRoot %APPDATA%\MscrmTools\XrmToolBox` (exit 0): `Plugin.dll` 28160 bytes sha256 `fbfe592d…8f55`, `Core.dll` 162816 bytes sha256 `ddc6367b…8519`, both ProductVersion `0.1.0+4be6992aa2ef…` - the AM-33 commit itself, rebuilt after committing so the identity names the code, previous copies backed up to `PluginBackups\AutomationMonitor\20261109-201043` |
-| WF-A.5 | Stop guessing at schema in the query: `DataverseSchema.WorkflowAttributes` becomes the only workflow projection, and the unread `primarycategory`/`secondarycategory` pair leaves the query, the raw model, the reference model and the mapper with it. | Guard test fails before the change and passes after; unit suite and plugin compile stay green | **Done (AM-33, 2026-11-09).** Seven documented columns, one list, one consumer. `DataverseSchemaTests` pins the set and rejects the removed names in either casing; the plugin compiles `0 Warning(s) 0 Error(s)` |
-| WF-A.6 | Make the next empty list explainable from the log without widening the status line: `CloudFlowSelectionResult.DescribeDiagnostics()` (columns asked for, rows read, selector value, distinct `category` values with counts, rows with no category) written through `LogInfo` when discovery yields nothing or is not usable | Unit test plus code read; the logged line is what the maintainer copies back | **Done (AM-33, 2026-11-09).** Log-only - the status line and `DescribeCoverage()` are untouched, because detail belongs in the log and honesty about coverage belongs on screen |
+| WF-A.5 | Stop guessing at schema in the query: `DataverseSchema.WorkflowAttributes` becomes the only workflow projection, and the unread `primarycategory`/`secondarycategory` pair leaves the query, the raw model, the reference model and the mapper with it. | Guard test fails before the change and passes after; unit suite and plugin compile stay green | **Done (AM-33, 2026-11-09).** Seven documented columns, one list, one consumer; AM-34 added an eighth, the `workflowid` identity column, so see WF-A.7. `DataverseSchemaTests` pins the set and rejects the removed names in either casing; the plugin compiles `0 Warning(s) 0 Error(s)` |
+| WF-A.6 | Make the next empty list explainable from the log without widening the status line: `CloudFlowSelectionResult.DescribeDiagnostics()` (columns asked for, rows read, selector value, distinct `category` values with counts, rows with no category) written through `LogInfo` when discovery yields nothing or is not usable | Unit test plus code read; the logged line is what the maintainer copies back | **Done (AM-33, 2026-11-09).** Log-only - the status line and `DescribeCoverage()` are untouched, because detail belongs in the log and honesty about coverage belongs on screen. AM-34 widened it with the identity facts (projection, distinct flag, per-source tally) and extended the trigger to rows dropped at identity, because the status line can count those but cannot explain them |
+| WF-A.7 | Make workflow identity independent of the query shape: project the documented primary id (`workflowid`), stop asking for distinct rows, and resolve the id in Core (`WorkflowIdentity`) with the row id only as a fallback and a refusal when the two disagree. Record on every row where its id came from, and report the projection, the distinct flag and the source tally in the log. | Guard test fails before the change and passes after; de-duplication stays the single `WorkflowKey` rule; unit suite and plugin compile stay green; **Windows gate** on the rerun | **Done at the core layer, rerun owed (AM-34, 2026-11-09).** Red before green after: at `7ee801b` the projection guard fails with `Expected: ["workflowid", …]  Actual: ["name", …]` (`Failed: 1, Passed: 384`); after the change **421 of 421** pass on Windows - 36 new cases covering every identity source, aliasing, `Guid.Empty`, conflicting ids, the observed 59-row shape, cross-source de-duplication and the diagnostics wording. `DescribeCoverage()` gained only the new "row(s) with conflicting ids skipped" segment; the status line still describes the environment. Whether a live row now carries its id into the grid is **L4 and unverified until the maintainer reruns discovery** |
 
 ### 5.3 WF-B - browse workflows without picking a solution
 
@@ -242,6 +261,13 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
   column is not a blank cell - Dataverse refuses the whole query - so `DataverseSchema.WorkflowAttributes`
   is the one projection list, `DataverseSchemaTests` is its guard, and a gateway builds its `ColumnSet`
   from that list alone. Guessing at a schema name is a defect, not a hedge.
+- Identity never depends on a query flag. A `Distinct` query returns no primary key values (documented
+  behaviour, and the cause of the 59 skipped rows on 2026-11-09), so the workflow projection names the
+  table's documented primary id, `DataverseSchema.WorkflowQueryDistinct` is `false`, and both are pinned by
+  `DataverseSchemaTests`. `WorkflowIdentity` alone resolves the value: projected column first, row id as
+  fallback, an all-zero `Guid` is not an id, and two disagreeing ids refuse the row. Every row records its
+  source; de-duplication stays the single `WorkflowKey` rule in the selector; an unidentifiable row is
+  counted and dropped - never keyed by a name, a join key or a generated value.
 - Wording follows blame. Only a request that left the process may read as "the environment did not
   answer"; a rejected query or a refused value names this build. A status line describes the environment,
   never the plugin's internals - the internals go to the log.
@@ -249,10 +275,10 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
 
 ## 8. Explicitly out of scope for this pass
 
-- No WF-B to WF-E code. This pass stops at what the first live session proved: the projection fix, the
-  wording that follows blame, and the diagnostic that makes the next empty list explainable. The
-  solution-less query, the multi-select UI, the Azure spike, the WPF proof of concept and the design
-  reorganisation all stay behind their own checkpoints.
+- No WF-B to WF-E code. This pass stops at what the live sessions proved: the projection fix, the identity
+  the query was discarding, the wording that follows blame, and the diagnostic that makes the next empty
+  list explainable. The solution-less query, the multi-select UI, the Azure spike, the WPF proof of concept
+  and the design reorganisation all stay behind their own checkpoints.
 - No speculative column in either direction, and no tenant data in this repository: the recorded facts
   name column behaviour and coverage, never an environment name, url, identifier or payload.
 - No Pester or PowerShell tooling on either workstation, and no CI workflow run or read.

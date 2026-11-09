@@ -158,13 +158,20 @@ namespace AutomationMonitor.Plugin
                     view.WatchlistButton.Enabled = result.IsUsable;
 
                     // An empty or degraded flow list is the case where "what did we ask for, and what
-                    // did the rows contain" decides the diagnosis. That detail goes to the log, never
-                    // into the status line, and it carries column names and codes only.
-                    if (discoveredFlows.Count == 0 || !result.IsUsable)
+                    // did the rows contain" decides the diagnosis - which includes rows this build could not
+                    // identify, because the status line can only count those, not explain where the id went.
+                    // That detail goes to the log, never into the status line, and it carries column names
+                    // and codes only.
+                    CloudFlowSelectionResult? selection = result.Value;
+                    if (selection == null
+                        || discoveredFlows.Count == 0
+                        || !result.IsUsable
+                        || selection.MissingIdCount > 0
+                        || selection.ConflictingIdCount > 0)
                     {
-                        LogInfo(result.Value == null
+                        LogInfo(selection == null
                             ? "Automation Monitor diagnostic - the flow read returned no result object at all."
-                            : result.Value.DescribeDiagnostics());
+                            : selection.DescribeDiagnostics());
                     }
                 }
             });

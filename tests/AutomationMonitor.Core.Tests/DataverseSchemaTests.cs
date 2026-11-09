@@ -19,8 +19,33 @@ public class DataverseSchemaTests
     public void TheWorkflowProjectionIsExactlyTheColumnsWeUnderstand()
     {
         Assert.Equal(
-            new[] { "name", "category", "statecode", "statuscode", "description", "createdon", "modifiedon" },
+            new[] { "workflowid", "name", "category", "statecode", "statuscode", "description", "createdon", "modifiedon" },
             DataverseSchema.WorkflowAttributes);
+    }
+
+    /// <summary>
+    /// The second regression that emptied the flow list, and the mirror image of the first: the read
+    /// succeeded, 59 rows arrived, and every one of them was dropped as "without an id". Identity is the
+    /// primary key, and a query is allowed to leave primary keys out (see
+    /// <see cref="DataverseSchema.WorkflowQueryDistinct"/>), so the id has to be a column this build names
+    /// and reads - not a value the SDK happens to fill in on a favourable query shape.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowProjectionCarriesTheIdentityColumn()
+    {
+        Assert.Contains(DataverseSchema.WorkflowId, DataverseSchema.WorkflowAttributes);
+        Assert.Equal("workflowid", DataverseSchema.WorkflowId);
+    }
+
+    /// <summary>
+    /// A distinct query does not carry primary key values - Learn says so in the remarks on
+    /// <c>QueryExpression.Distinct</c> - so turning it on costs every workflow row its identity. The
+    /// de-duplication it appeared to provide belongs in Core, where removing a row is counted and shown.
+    /// </summary>
+    [Fact]
+    public void WorkflowDiscoveryIsNeverADistinctQuery()
+    {
+        Assert.False(DataverseSchema.WorkflowQueryDistinct);
     }
 
     /// <summary>
@@ -41,9 +66,10 @@ public class DataverseSchemaTests
     [Fact]
     public void TheWorkflowProjectionKeepsEveryColumnADecisionDependsOn()
     {
-        // Identity comes from the row id, so it is not projected. These four carry the cloud-flow
-        // decision, the enablement state and the grid; losing one turns a Complete result into a wrong
-        // one rather than a visible failure.
+        // These carry the identity, the cloud-flow decision, the enablement state and the grid. Losing one
+        // turns a Complete result into a wrong one rather than a visible failure, which is why they are
+        // pinned here and not left to the query.
+        Assert.Contains("workflowid", DataverseSchema.WorkflowAttributes);
         Assert.Contains("name", DataverseSchema.WorkflowAttributes);
         Assert.Contains("category", DataverseSchema.WorkflowAttributes);
         Assert.Contains("statecode", DataverseSchema.WorkflowAttributes);

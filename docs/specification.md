@@ -3,7 +3,7 @@
 > **Product requirements and technical design — working specification**  
 > **Version:** 0.1 (planning baseline)  
 > **Date:** 29 October 2026  
-> **Status:** Proposed; no implementation or API proof of concept has been completed  
+> **Status:** Active. M1 discovery, the M3 run-history core and the M4 persistence core are implemented and covered by tests; the delivered track and its acceptance gates live in [docs/roadmap.md](docs/roadmap.md), and the Windows runtime sign-off is still open  
 > **Primary platform:** XrmToolBox for Microsoft Dataverse / Dynamics 365  
 > **Initial operating model:** Standalone, read-only desktop plugin; no separately hosted components
 
@@ -132,7 +132,7 @@ These releases represent a **suggested implementation sequence**, not promised d
 
 ## 5. Main navigation and user experience
 
-The plugin will use **native WinForms** (the standard XrmToolBox approach), keeping the interface efficient and familiar. A future WebView-based UI is possible but not a first-release dependency.
+The plugin will use **native WinForms** (the standard XrmToolBox approach), keeping the interface efficient and familiar. A future WebView-based UI is possible but not a first-release dependency. A modernised visual direction and a hosted WPF surface are under evaluation, not adopted: the feasibility checkpoints (WF-D) and the Windows runtime gate that decides them are recorded in [docs/roadmap.md](docs/roadmap.md), and until a proof of concept both builds and loads inside XrmToolBox every view stays native WinForms.
 
 ### 5.1 Main pages
 

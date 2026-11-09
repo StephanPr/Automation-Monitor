@@ -58,6 +58,13 @@ Windows session records:
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
+**Who runs it:** the maintainer. The agent's part ends at a deployed build plus the numbered
+checklist and the build identity to compare against; it then records what the maintainer reports.
+No agent session connects to a Dataverse or Azure environment - the test environment holds sensitive
+business data - and none automates the host's UI to obtain a result. Reported findings are recorded as
+behaviour, coverage state and wording; environment names, tenant identifiers, flow or run identifiers
+and payloads stay out of the repository, the logs and the conversation.
+
 ## 4. The Windows feedback track
 
 ### 4.1 Origin and baseline identity

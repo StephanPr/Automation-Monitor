@@ -61,6 +61,10 @@ value into `true` would invent a fact the source never stated.
 
 ### Spike checklist for the first Windows session (M1 exit criteria)
 
+Every item below is executed by the maintainer against an environment they choose. An agent records the
+answer as a fact with its evidence; it does not connect to an environment itself, and the recorded fact
+names column behaviour and coverage - not tenant content.
+
 1. Confirm the solution query returns the expected solutions (managed and unmanaged) and that
    `ismanaged`, `version` and `uniquename` are populated.
 2. Confirm one known solution returns its cloud flows, that the count matches make.powerautomate.com,
@@ -141,6 +145,9 @@ would silently hide runs, which is the asymmetry that decision is based on.
   and is never implied by `RunTree.DescendantCount` or `TotalDurationMs`.
 
 ### Spike checklist for the first Windows session (M3 exit criteria)
+
+Maintainer-run, as in the M1 checklist above: an agent records the reported answer and never connects
+to an environment itself.
 
 1. Pick one solution-aware cloud flow from discovery and confirm a known failed run appears with the
    same run id and outcome make.powerautomate.com shows. That is the POC gate's "a real failed run

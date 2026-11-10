@@ -23,6 +23,10 @@ namespace AutomationMonitor.Plugin.UI
             WatchlistButton = new Button { Text = "3. Build watchlist", Dock = DockStyle.Left, Width = 132, Height = 28, Enabled = false };
             CancelButton = new Button { Text = "Cancel", Dock = DockStyle.Right, Width = 84, Height = 28, Enabled = false };
 
+            // The AM-35 spike control: one labelled action over the selected flow, on its own row so it can
+            // never be mistaken for a step of the discovery the operator is working through.
+            ProbeButton = new Button { Text = "Probe run history (diagnostic)", Dock = DockStyle.Left, Width = 216, Height = 26, Enabled = false };
+
             SolutionSelector = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = nameof(SolutionChoice.Label) };
             SearchBox = new TextBox { Dock = DockStyle.Right, Width = 210 };
             Label searchHint = new Label { Text = "Filter:", Dock = DockStyle.Right, Width = 46, TextAlign = ContentAlignment.MiddleRight };
@@ -62,12 +66,30 @@ namespace AutomationMonitor.Plugin.UI
 
             StatusLabel = new Label { Dock = DockStyle.Top, Height = 24, AutoEllipsis = true, Text = "Connect to a Dataverse environment to begin." };
             CoverageLabel = new Label { Dock = DockStyle.Bottom, Height = 24, AutoEllipsis = true, Text = "No watchlist built yet. Nothing is written to disk in this milestone." };
+
+            // Selection state is control state, so the view decides only whether an action is clickable -
+            // never what a probe means or what it will ask the environment for.
+            FlowGrid.SelectionChanged += (sender, args) => UpdateProbeEnabled();
+
+            Label probeHint = new Label
+            {
+                Text = "Read-only identity check over the selected flow: counts and column shapes only, written to the log.",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
+            };
+
+            Panel probeRow = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(8, 2, 8, 4) };
+            probeRow.Controls.Add(probeHint);
+            probeRow.Controls.Add(ProbeButton);
+
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 52 };
             footer.Controls.Add(StatusLabel);
             footer.Controls.Add(CoverageLabel);
 
             Controls.Add(FlowGrid);
             Controls.Add(footer);
+            Controls.Add(probeRow);
             Controls.Add(toolbar);
 
             ResumeLayout(true);
@@ -79,6 +101,9 @@ namespace AutomationMonitor.Plugin.UI
         public Button WatchlistButton { get; }
 
         public Button CancelButton { get; }
+
+        /// <summary>The AM-35 diagnostic action, disabled until a flow row is selected.</summary>
+        public Button ProbeButton { get; }
 
         public ComboBox SolutionSelector { get; }
 
@@ -98,6 +123,34 @@ namespace AutomationMonitor.Plugin.UI
                 SolutionChoice? choice = SolutionSelector.SelectedItem as SolutionChoice;
                 return choice == null ? null : choice.Solution.Id;
             }
+        }
+
+        /// <summary>
+        /// The workflow id of the highlighted flow row, or null when nothing is selected. It is already the
+        /// canonical provider identity the grid displays, so the probe asks about exactly the row the
+        /// operator is looking at rather than a name that could collide.
+        /// </summary>
+        public string? SelectedWorkflowId
+        {
+            get
+            {
+                DataGridViewRow? row = FlowGrid.CurrentRow;
+                if (row == null)
+                {
+                    return null;
+                }
+
+                FlowRow? flow = row.DataBoundItem as FlowRow;
+                return flow == null || string.IsNullOrWhiteSpace(flow.WorkflowId) ? null : flow.WorkflowId;
+            }
+        }
+
+        private bool busy;
+
+        /// <summary>One rule for when the diagnostic may be clicked, so no path can leave it half-enabled.</summary>
+        private void UpdateProbeEnabled()
+        {
+            ProbeButton.Enabled = !busy && SelectedWorkflowId != null;
         }
 
         /// <summary>Rebinds the selector, keeping the current pick when it still matches.</summary>
@@ -141,6 +194,7 @@ namespace AutomationMonitor.Plugin.UI
         /// <summary>One place decides what "busy" means, so no view can be left half-clickable.</summary>
         public void SetBusy(bool isBusy)
         {
+            busy = isBusy;
             SolutionsButton.Enabled = !isBusy;
             FlowsButton.Enabled = !isBusy && SelectedSolutionId != null;
             WatchlistButton.Enabled = !isBusy && FlowGrid.DataSource != null;
@@ -148,6 +202,7 @@ namespace AutomationMonitor.Plugin.UI
             SolutionSelector.Enabled = !isBusy;
             SearchBox.Enabled = !isBusy;
             UseWaitCursor = isBusy;
+            UpdateProbeEnabled();
         }
 
         public void Say(string message)

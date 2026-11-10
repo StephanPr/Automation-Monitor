@@ -157,7 +157,9 @@ a tenant from this host**: the code and its tests are verified, the round trip i
 | Run identifier | `name`, String(100) — the Logic Apps run name of the execution | Same, plus the run-history article | Chosen as `WorkflowRun.RunId` because `parentrunid` points at this value |
 | Parent link | `parentrunid`, String(100) | Same | the only parent/child evidence used |
 | Tracking id | `clienttrackingid`, String(255) | Same | becomes `WorkflowRun.CorrelationId`; there is **no** `correlationid` column |
-| Owning flow | `workflowid`, String(100); a `workflow` Lookup also exists | Same | server-side filter; a row naming another flow is refused, not merged |
+| Owning flow, as text | `workflowid`, String(100), documented as "unique identifier of the workflow associated with this run" | FlowRun entity reference, re-read 2026-11-10, cross-checked against the local schema validation of the same table | The production run query filters on this column. Which of the workflow table's identifiers the text actually stores is **not documented**, and the table exposes three - so it is measured, not assumed; see "The AM-35 identity probe" below. A row naming another flow is refused, not merged |
+| Owning flow, as a lookup | `workflow`, Lookup to `workflow`, RequiredLevel **None** | Same | The join the platform documents: the referenced primary key is `workflow.workflowid`, which is exactly the value discovery uses as workflow identity. **Not** projected by the monitoring query - only by the probe (`DataverseSchema.RunProbeAttributes`) - because a projected column is a contract with the platform and the production projection is already proven live |
+| Flow platform kind | `modernflowtype`, Picklist `flowrun_modernflowtype`: `0` PowerAutomateFlow, `1` CopilotStudioFlow, `2` M365CopilotAgentFlow | Same, re-read 2026-11-10 | **Not projected and not filtered on.** It would not narrow this read: a flow's platform kind is a property of the flow, and discovery already selects `workflow.category = 5`. Recorded so that adding it later is a decision rather than a guess |
 | Flow display name | not a `flowrun` column (`flowname` does not exist) | Column-list scan of the entity reference | the name comes from the request scope; without it the row reads `(unnamed workflow)` |
 | Duration | `duration`, **BigInt**, milliseconds (schema name `DurationInMs`) | Same | **not seconds**; read type-tolerantly as `long`, never rescaled |
 | Status | `status`, String(100), RequiredLevel **None** | Same | free text; absent or unrecognised becomes `RunStatus.Unknown` and stays visible |
@@ -182,6 +184,53 @@ connecting user's zone. The gateway therefore sends the window widened by ±1 da
 (`RunQueryCriteria.ServerFromUtc` / `ServerToUtc`) and `RunQueryService` re-applies the exact
 half-open `[from, to)` window to every row. A widened read costs a few discarded rows; a narrowed one
 would silently hide runs, which is the asymmetry that decision is based on.
+
+### The AM-35 identity probe (bounded diagnostic; deployed, answer owed)
+
+`flowrun` documents two columns that each claim to name the owning flow, and only one of them can hold the
+identity discovery produces. That is not a detail: the monitoring query filters on the text column, so if that
+text stores a different workflow identifier than the one discovery reads, every flow shows an empty run list
+while the portal shows runs - a scope failure no filtering logic could fix. The schema does not settle it, so
+the spike asks the environment instead. `DataverseFlowRunProbe` (plugin side) is the whole implementation;
+`FlowRunProbeDiagnostics` (core side) is the comparison and the wording.
+
+What it does, and what bounds it:
+
+- **Two isolated reads** of the selected flow, a seven-day window, a hard ceiling of five rows each, both
+  ordered `starttime` descending and both widened by the same ±1 day the monitoring path uses, so the two
+  answers differ only by the column they filtered on:
+  - **A** - `flowrun.workflowid = <identity as a string>` in the canonical dashed spelling, i.e. what
+    production does;
+  - **B** - `flowrun.workflow = <identity as a GUID>` lookup value, i.e. the documented join.
+- **Compared in memory by `flowrunid`**: rows per filter, distinct run ids per filter, and how many run ids
+  came back through both. Canonicalisation is the shared `CanonicalId` rule, so one run spelled three ways is
+  one run and a repeated page cannot inflate the overlap.
+- **Bounded by construction.** Paging goes through the shared `PageReader` with page size = row ceiling = 5 and
+  a two-page limit, deliberately **without** `TopCount`: `TopCount` makes the platform report that there are no
+  more records, which would let a five-row sample claim a complete window. A read that reaches the ceiling is
+  reported as a sample with more rows pending.
+- **Read-only**: `RetrieveMultiple` only, one connection, no new package, no write, no second query path that
+  the monitoring pipeline could accidentally share - the production criteria, normalizer and correlation
+  resolver are untouched.
+- **Structural output.** The report is counts, column names, CLR type names and coverage-state tokens. The
+  requested identity, the run ids and the provider's error text are compared in memory and cannot reach the
+  rendered line; the message is dropped where the probe catches it, keeping only the exception type name and
+  the classified state. A unit test asserts that a fixture id, run name and tenant url do not survive into the
+  line. The screen shows two counts; the structural detail goes to the XrmToolBox log.
+
+What each verdict means - and does not:
+
+| Verdict | Observation | Next step |
+|---|---|---|
+| Both filters return the same runs | the text column stores the primary id discovery uses; for this table the two are interchangeable | moving the production filter to the documented lookup is a separate change with its own tests |
+| Only the text filter returns rows | the lookup column is not populated, or not queryable, in this environment | keep the text filter and record that the documented join is unusable here |
+| Only the lookup filter returns rows | the text column holds something else - another workflow identifier, or nothing | the monitoring filter is wrong for this environment; open the fix as its own task |
+| Rows both ways, none in common | something other than identity separated the two reads | investigate with the reported shapes; the probe does not explain it |
+| No rows either way | **inconclusive** | consistent with run-history ingestion off, retention shorter than a week, no `FlowRun` read permission, or a flow that genuinely did not run. The probe lists these and picks none |
+| A query refused | not an empty query | settle the coverage state first; `Unsupported` / `Unauthorized` wording already exists |
+
+The spike settles the identity question only. `parentrunid`'s parent/child semantics (checklist item 8) remain
+a separate task, and a five-row ceiling says nothing about whether any window is complete.
 
 ### Coverage limits this milestone must keep admitting
 
@@ -240,6 +289,13 @@ to an environment itself.
    run list that is empty for a flow the portal shows as having runs, which is a scope failure and not a
    filtering bug. No answer is assumed in code: the filter value is exactly the discovery identity. This is
    the first thing to settle before M3 is claimed against a tenant.
+   **Amended 2026-11-10 (AM-35).** The re-read of the entity reference found a second candidate the wording
+   above did not know about: `flowrun.workflow`, a Lookup to `workflow` whose referenced key is exactly the
+   identity discovery uses, and the local schema validation of the same table confirmed both columns exist.
+   The question is now measured rather than reasoned about - run the identity probe above on one selected flow
+   and report its log line. Both filters returning the same runs settles both halves at once (the text stores
+   the primary id, not `workflowidunique`); the verdict table in "The AM-35 identity probe" says what every
+   other answer means, and no answer licenses a change to the monitoring query by itself.
 
 ### Power Platform Flow Runs API — assessed, deliberately not used (M3.2)
 

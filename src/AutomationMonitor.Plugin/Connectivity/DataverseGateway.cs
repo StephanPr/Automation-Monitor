@@ -309,7 +309,14 @@ namespace AutomationMonitor.Plugin.Connectivity
             return DataverseValue.AsInt64(Unwrap(entity, attribute), attribute);
         }
 
-        private static object? Unwrap(Entity entity, string attribute)
+        /// <summary>
+        /// The SDK reduction every reader in this plugin shares: alias unwrapped, option set reduced to its
+        /// integer, nothing else interpreted. Internal rather than private because
+        /// <see cref="DataverseFlowRunProbe"/> reports column shapes and must see exactly the same values the
+        /// production reader sees - two copies of this rule would let a diagnostic report a shape the
+        /// monitoring path never received.
+        /// </summary>
+        internal static object? Unwrap(Entity entity, string attribute)
         {
             bool ignored;
             return Unwrap(entity, attribute, out ignored);
@@ -320,7 +327,7 @@ namespace AutomationMonitor.Plugin.Connectivity
         /// reporting, because a query with a join can alias every column it returns and a reader that only
         /// understands the plain shape would lose the id without noticing.
         /// </summary>
-        private static object? Unwrap(Entity entity, string attribute, out bool wasAliased)
+        internal static object? Unwrap(Entity entity, string attribute, out bool wasAliased)
         {
             wasAliased = false;
             if (!entity.Contains(attribute))

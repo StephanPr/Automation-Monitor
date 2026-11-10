@@ -27,6 +27,13 @@ namespace AutomationMonitor.Plugin
         private const string SolutionsSource = "Solutions";
         private const string FlowsSource = "Solution cloud flows";
 
+        /// <summary>
+        /// Label for the AM-35 diagnostic. It is deliberately not called "run history": one five-row sample
+        /// per filter is an identity check, and a label that promised history would read as coverage the
+        /// probe does not have.
+        /// </summary>
+        private const string ProbeSource = "Run-history identity probe";
+
         private readonly DiscoveryView view;
         private readonly IClock clock = new SystemClock();
 
@@ -46,6 +53,7 @@ namespace AutomationMonitor.Plugin
             view.SolutionsButton.Click += (sender, args) => ExecuteMethod(LoadSolutions);
             view.FlowsButton.Click += (sender, args) => ExecuteMethod(LoadCloudFlows);
             view.WatchlistButton.Click += (sender, args) => BuildWatchlist();
+            view.ProbeButton.Click += (sender, args) => ExecuteMethod(RunFlowRunProbe);
             view.CancelButton.Click += (sender, args) => CancelRunningWork();
             view.SearchBox.TextChanged += (sender, args) => BindSolutionChoices();
             view.SolutionSelector.SelectedIndexChanged += (sender, args) => OnSolutionChanged();
@@ -209,6 +217,86 @@ namespace AutomationMonitor.Plugin
             view.Say(watchlist.HasFullCoverage
                 ? "Watchlist built in memory from " + chosen.Label + "."
                 : "Watchlist built in memory, but its discovery was " + SourceStatus.Label(watchlist.State) + ".");
+        }
+
+        /// <summary>
+        /// AM-35: the read-only identity probe over the selected flow. One operation on the same worker seam
+        /// every other read uses, cancelable, and gone when the control is disposed.
+        ///
+        /// <para>
+        /// The screen gets a sentence with two counts, because a status line describes the environment rather
+        /// than this tool's reasoning. The structural detail - column shapes, paging, the verdict - goes to
+        /// the log, which is where a maintainer reads implementation detail without it becoming an operator's
+        /// problem. Neither line can carry an id, a name, an error message or a payload: the outcome type is
+        /// built from counts and codes, and the probe drops the provider message where it catches it.
+        /// </para>
+        /// </summary>
+        private void RunFlowRunProbe()
+        {
+            string? workflowId = view.SelectedWorkflowId;
+            if (string.IsNullOrEmpty(workflowId))
+            {
+                view.Say("Select a cloud flow row first, then run the probe.");
+                return;
+            }
+
+            if (Service == null)
+            {
+                view.Say("Connect to a Dataverse environment before running the probe.");
+                return;
+            }
+
+            DataverseFlowRunProbe probe = new DataverseFlowRunProbe(Service);
+            CancellationToken token = BeginWork();
+            DateTimeOffset checkedAtUtc = clock.UtcNow;
+
+            view.SetBusy(true);
+            view.Say("Probing run history for the selected flow (read-only, five rows per query)...");
+
+            WorkAsync(new WorkAsyncInfo
+            {
+                Message = "Probing run history identity...",
+                IsCancelable = true,
+                Work = (worker, args) => { args.Result = probe.Run(workflowId!, checkedAtUtc, token); },
+                PostWorkCallBack = args =>
+                {
+                    EndWork();
+                    view.SetBusy(false);
+
+                    Exception? error = args.Error;
+                    if (error != null)
+                    {
+                        ReportFailure(error, ProbeSource);
+                        return;
+                    }
+
+                    FlowRunProbeOutcome? outcome = args.Result as FlowRunProbeOutcome;
+                    if (outcome == null)
+                    {
+                        view.Say("The probe returned no result object at all.");
+                        return;
+                    }
+
+                    // The detail belongs in the log; the status line stays about the environment.
+                    LogInfo(outcome.Describe());
+                    view.Say(ProbeSummary(outcome));
+                }
+            });
+        }
+
+        /// <summary>
+        /// The on-screen sentence: two counts, how many runs came back both ways, and where the detail is. It
+        /// calls a five-row sample what it is and never implies the window was read.
+        /// </summary>
+        private static string ProbeSummary(FlowRunProbeOutcome outcome)
+        {
+            return "Probe read " + outcome.StringFilter.Rows.ToString() + " row(s) through the text filter and "
+                + outcome.LookupFilter.Rows.ToString() + " row(s) through the lookup filter; "
+                + outcome.OverlapCount.ToString() + " run(s) came back both ways. "
+                + (outcome.IsInconclusive
+                    ? "Identity question still open - this probe does not say why."
+                    : "Both filters answered; see the log for the shapes.")
+                + " Structural detail is in the XrmToolBox log.";
         }
 
         private void BindSolutionChoices()

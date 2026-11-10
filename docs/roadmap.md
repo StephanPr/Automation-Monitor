@@ -7,18 +7,20 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-09 - the first live session is recorded. Solutions read `complete - 975 row(s) over
-4 page(s)` and the WF-A cast did not return; flows failed for a different reason that belongs to this
-build - a projected column the platform does not have - which AM-33 removes together with the wording that
-blamed a working connection. Rerunning flow discovery is the one gate still open.
+Last updated: 2026-11-10 - AM-34 fixed the identity that the flow query was discarding, and AM-35 added the
+bounded run-history identity probe (WF-A.8): two isolated five-row diagnostic queries over one selected flow,
+compared in memory and reported as counts and column shapes only. Two live reports are owed, both by the
+maintainer - the rerun of flow discovery, and one run of the probe. The monitoring query itself did not change
+because of the spike: `flowrun` documents two workflow columns and the probe exists to find out which one
+holds the identity discovery produces.
 
 ## 1. Where the project stands
 
 | Area | State | Evidence layer |
 |---|---|---|
-| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 421 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix) |
+| Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 450 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix, 450 after the AM-35 probe rules) |
 | M1 solution and cloud-flow discovery | Implemented in core and gateway; **cast and projection defects confirmed live and fixed; the identity defect is fixed with a guard test and awaits its rerun** | Mapping and identity decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox; the flow read answered with 59 rows live but every one of them lost its id (AM-34), so **no flow row has been displayed yet** |
-| M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; no UI caller | Core layer only; never executed against a tenant |
+| M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; still no run grid. The only run-history UI is the AM-35 diagnostic probe, which is a measurement and not a view | Core decisions unit tested (450 tests, smoke `PASS`); the production run read has never been executed against a tenant; the probe compiles and is deployed, and only the maintainer's run of it can answer the identity question |
 | M4 saved watchlists and settings | Core implemented (`a23f216`); plugin storage root and Watchlists view **paused** | Core layer only, against an in-memory file seam |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
@@ -64,6 +66,9 @@ Windows session records:
    environment, the log says what this build asked for - so copy it back with the report. It is also written
    when rows were dropped for missing or conflicting identity, which the status line can count but not
    explain.
+7. for the AM-35 identity probe (WF-A.8), the line it writes to the same log: two counts, the overlap, the
+   column shapes and the verdict. It carries no identifier, no name and no provider message by construction,
+   so it is safe to paste back verbatim - and only the maintainer's run of it counts as the answer.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -184,6 +189,7 @@ sentence again |
 | WF-A.5 | Stop guessing at schema in the query: `DataverseSchema.WorkflowAttributes` becomes the only workflow projection, and the unread `primarycategory`/`secondarycategory` pair leaves the query, the raw model, the reference model and the mapper with it. | Guard test fails before the change and passes after; unit suite and plugin compile stay green | **Done (AM-33, 2026-11-09).** Seven documented columns, one list, one consumer; AM-34 added an eighth, the `workflowid` identity column, so see WF-A.7. `DataverseSchemaTests` pins the set and rejects the removed names in either casing; the plugin compiles `0 Warning(s) 0 Error(s)` |
 | WF-A.6 | Make the next empty list explainable from the log without widening the status line: `CloudFlowSelectionResult.DescribeDiagnostics()` (columns asked for, rows read, selector value, distinct `category` values with counts, rows with no category) written through `LogInfo` when discovery yields nothing or is not usable | Unit test plus code read; the logged line is what the maintainer copies back | **Done (AM-33, 2026-11-09).** Log-only - the status line and `DescribeCoverage()` are untouched, because detail belongs in the log and honesty about coverage belongs on screen. AM-34 widened it with the identity facts (projection, distinct flag, per-source tally) and extended the trigger to rows dropped at identity, because the status line can count those but cannot explain them |
 | WF-A.7 | Make workflow identity independent of the query shape: project the documented primary id (`workflowid`), stop asking for distinct rows, and resolve the id in Core (`WorkflowIdentity`) with the row id only as a fallback and a refusal when the two disagree. Record on every row where its id came from, and report the projection, the distinct flag and the source tally in the log. | Guard test fails before the change and passes after; de-duplication stays the single `WorkflowKey` rule; unit suite and plugin compile stay green; **Windows gate** on the rerun | **Done at the core layer, rerun owed (AM-34, 2026-11-09).** Red before green after: at `7ee801b` the projection guard fails with `Expected: ["workflowid", …]  Actual: ["name", …]` (`Failed: 1, Passed: 384`); after the change **421 of 421** pass on Windows - 36 new cases covering every identity source, aliasing, `Guid.Empty`, conflicting ids, the observed 59-row shape, cross-source de-duplication and the diagnostics wording. `DescribeCoverage()` gained only the new "row(s) with conflicting ids skipped" segment; the status line still describes the environment. **Deployed 2026-11-09 21:01** through `scripts\deploy.ps1 -Configuration Release -StorageRoot %APPDATA%\MscrmTools\XrmToolBox` (exit 0, `installed … (2 files)`): `Plugins\AutomationMonitor.Plugin.dll` 28672 B sha256 `3102F38749B220B5…` and `Plugins\AutomationMonitor.Core.dll` 165376 B sha256 `C8B4054276726091…`, both `ProductVersion 0.1.0+4908d5d4bcc5…` and byte-identical to the built pair, previous copies backed up to `PluginBackups\AutomationMonitor\20261109-210152`. Whether a live row now carries its id into the grid is **L4 and unverified until the maintainer restarts XrmToolBox and reruns discovery** |
+| WF-A.8 | **AM-35 identity spike (bounded, read-only).** Settle which `flowrun` column carries the identity discovery produces: `workflowid` (String 100 - what the monitoring query filters on today) or `workflow` (Lookup - the documented join, whose referenced key is `workflow.workflowid`). Two isolated queries over the selected flow, seven-day window, five-row ceiling each, compared in memory by `flowrunid`, reported as counts and CLR type names only. The production criteria, normalizer and correlation resolver are deliberately untouched: a spike measures, a later task changes. | Windows plus a test environment; the spike writes a fact in docs/provider-capabilities.md, and any change to the monitoring query is its own task with its own tests | **Built, deployed, answer owed (2026-11-10).** `DataverseFlowRunProbe` (plugin side) plus `FlowRunProbeDiagnostics` (core side), one labelled diagnostic action in the discovery view, 450 unit tests green and the `net48` build clean. The verdict table lives in "The AM-35 identity probe" in docs/provider-capabilities.md; the maintainer's log line is the evidence, and until it arrives no column is called authoritative |
 
 ### 5.3 WF-B - browse workflows without picking a solution
 
@@ -228,9 +234,11 @@ WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a
 ## 6. Sequence, dependencies and what stays paused
 
 1. WF-0 host parity: nothing on Windows can be measured before it.
-2. WF-A: discovery must work on the real host before anything else is visible there. WF-A.1 to A.6 are
-   done; what remains is the maintainer's rerun of flow discovery on the AM-33 build, which is also the
-   first chance to confirm the `category` values the new diagnostic logs.
+2. WF-A: discovery must work on the real host before anything else is visible there. WF-A.1 to A.6 and A.7
+   are done; what remains is the maintainer's rerun of flow discovery on the AM-34 build, which is also the
+   first chance to confirm the `category` values the diagnostic logs. WF-A.8 - the AM-35 identity probe - is
+   deployed on the same build and needs one run of its own; its answer decides whether a later, separate task
+   moves the run filter to the documented lookup.
 3. WF-B.1 spike, then WF-B.2 to B.5.
 4. Resume M4: C5 plugin storage root and the disk ISettingsFileAccess, C6 the Watchlists view,
    tab host and reconciliation preview, C7 the full gate with an unchanged package audit, C8 the
@@ -268,6 +276,10 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
   fallback, an all-zero `Guid` is not an id, and two disagreeing ids refuse the row. Every row records its
   source; de-duplication stays the single `WorkflowKey` rule in the selector; an unidentifiable row is
   counted and dropped - never keyed by a name, a join key or a generated value.
+- Two columns can claim the same relationship. `flowrun` documents `workflowid` (String 100) and `workflow`
+  (Lookup), and the monitoring query filters on the text one. Until the live probe (WF-A.8) says otherwise the
+  filter stays where it is and the probe carries the question: a documented join is not proof that a tenant
+  populates it, and a diagnostic never changes what the monitoring path sends.
 - Wording follows blame. Only a request that left the process may read as "the environment did not
   answer"; a rejected query or a refused value names this build. A status line describes the environment,
   never the plugin's internals - the internals go to the log.
@@ -281,6 +293,11 @@ WatchlistStoreResult, and a serializer that refuses a payload which is not exact
   and the design reorganisation all stay behind their own checkpoints.
 - No speculative column in either direction, and no tenant data in this repository: the recorded facts
   name column behaviour and coverage, never an environment name, url, identifier or payload.
+- Nothing from the AM-35 probe reached the monitoring path. `RunQueryCriteria`, `DataverseRunNormalizer`,
+  `RunCorrelationResolver` and the production `RunAttributes` projection are what AM-34 left them, and a test
+  now pins those thirteen columns so a diagnostic cannot widen them by accident. `parentrunid`'s parent/child
+  semantics stay a separate task - the probe does not read that column, and its five-row ceiling makes no
+  claim about any window being complete.
 - No Pester or PowerShell tooling on either workstation, and no CI workflow run or read.
 - No push, merge, tag, release or history rewrite. Every local commit stays local; the M4
   implementation stays paused at `a23f216`, with this planning commit on top of it.

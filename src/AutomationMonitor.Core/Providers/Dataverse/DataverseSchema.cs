@@ -143,8 +143,28 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         /// </summary>
         public const string RunName = "name";
 
-        /// <summary>Cloud flow this execution belongs to (String 100), matched to <see cref="WorkflowId"/>.</summary>
+        /// <summary>
+        /// Cloud flow this execution belongs to, as a text column (String 100) whose documented meaning is
+        /// "unique identifier of the workflow associated with this run". This is what the production run
+        /// query filters on today. The Learn page for the table documents the column as text, not as a
+        /// lookup, and does not say which of the workflow table's identifiers it stores - see
+        /// docs/provider-capabilities.md, where AM-35 records the live answer.
+        /// </summary>
         public const string RunWorkflowId = "workflowid";
+
+        /// <summary>
+        /// The same execution's workflow as a <c>Lookup</c> to the workflow table (RequiredLevel None). This
+        /// is the join the platform documents - workflow.workflowid is the referenced primary key - while
+        /// <see cref="RunWorkflowId"/> is a text column whose contents are not documented well enough to
+        /// trust as identity.
+        ///
+        /// <para>
+        /// It is deliberately <strong>not</strong> in <see cref="RunAttributes"/>: the production query and
+        /// its normalizer stay exactly as they are until the live spike establishes what the text column
+        /// really holds. Only <see cref="RunProbeAttributes"/> carries it.
+        /// </para>
+        /// </summary>
+        public const string RunWorkflowLookup = "workflow";
 
         /// <summary>Start instant (DateTime, UserLocal behaviour: read as the UTC Dataverse stores).</summary>
         public const string RunStartTime = "starttime";
@@ -195,6 +215,31 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             RunFlowRunId,
             RunName,
             RunWorkflowId,
+            RunStartTime,
+            RunEndTime,
+            RunDuration,
+            RunStatus,
+            RunErrorCode,
+            RunErrorMessage,
+            RunParentRunId,
+            RunClientTrackingId,
+            RunIsPrimary,
+            RunTriggerType
+        };
+
+        /// <summary>
+        /// The projection the AM-35 diagnostic probe asks for: every production run column plus the
+        /// documented <see cref="RunWorkflowLookup"/>, so one read can report both workflow columns instead
+        /// of needing two round trips per shape. Kept separate from <see cref="RunAttributes"/> on purpose -
+        /// the spike must not silently change what the monitoring query sends, because a projected column is
+        /// a contract with the platform and the production projection is already proven live.
+        /// </summary>
+        public static readonly string[] RunProbeAttributes =
+        {
+            RunFlowRunId,
+            RunName,
+            RunWorkflowId,
+            RunWorkflowLookup,
             RunStartTime,
             RunEndTime,
             RunDuration,

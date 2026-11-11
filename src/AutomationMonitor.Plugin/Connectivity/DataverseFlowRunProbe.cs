@@ -61,18 +61,22 @@ namespace AutomationMonitor.Plugin.Connectivity
             FlowRunProbeRead text = new FlowRunProbeRead(DataverseSchema.RunWorkflowId, "text");
             FlowRunProbeRead lookup = new FlowRunProbeRead(DataverseSchema.RunWorkflowLookup, "lookup");
 
+            // The window belongs to the run rather than to the queries: even a probe that could not ask
+            // anything has to report the window it was going to ask about, or the next run's report cannot be
+            // compared with this one.
+            DateTimeOffset toUtc = checkedAtUtc.ToUniversalTime();
+            DateTimeOffset fromUtc = FlowRunProbeDiagnostics.WindowStart(toUtc);
+
             string identity = (workflowIdentity ?? string.Empty).Trim();
             if (identity.Length == 0)
             {
                 text.NotAttemptedReason = "no workflow identity was selected";
                 lookup.NotAttemptedReason = "no workflow identity was selected";
-                return new FlowRunProbeOutcome(text, lookup, null);
+                return new FlowRunProbeOutcome(text, lookup, null, fromUtc, toUtc);
             }
 
             Guid workflowId;
             bool isGuid = Guid.TryParse(identity, out workflowId);
-            DateTimeOffset toUtc = checkedAtUtc.ToUniversalTime();
-            DateTimeOffset fromUtc = FlowRunProbeDiagnostics.WindowStart(toUtc);
 
             // The same widening the monitoring path uses: starttime is a UserLocal column, so a bound in UTC
             // may be interpreted in the connecting user's zone. The probe compares two reads against each
@@ -95,7 +99,7 @@ namespace AutomationMonitor.Plugin.Connectivity
                 Read(lookup, DataverseSchema.RunWorkflowLookup, new EntityReference(DataverseSchema.WorkflowEntity, workflowId), serverFrom, serverTo, cancellationToken);
             }
 
-            return new FlowRunProbeOutcome(text, lookup, identity);
+            return new FlowRunProbeOutcome(text, lookup, identity, fromUtc, toUtc);
         }
 
         /// <summary>

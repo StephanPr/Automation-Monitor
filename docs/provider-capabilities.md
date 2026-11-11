@@ -141,7 +141,12 @@ third is why identity is a projected column *and* a per-row record of where the 
 degraded flow list writes `DescribeDiagnostics()` to the XrmToolBox log — the projected columns, the row
 count, the selector value, whether `workflowid` was projected, whether the query was distinct, where each
 row's identity came from, and the distinct `category` values seen — so one session settles the identity
-question and the `category = 5` question from a single log line instead of another guess.
+question and the `category = 5` question from one diagnostic instead of another guess.
+**Conditional, measured 2026-11-11 (AM-36):** that line is written at Information, and XrmToolBox's
+`LogManager` skips entries below its log level, which is `Warning` by default and `Warning` on the primary host.
+So the line exists but no file holds it unless the operator raises Settings → log level first. The probe result
+no longer depends on that (it is shown in its own window); the discovery diagnostic does, and closing that gap is
+roadmap item WF-A.9 rather than a reason to widen the status line.
 
 ## Power Automate run history (`flowrun`) — M3
 
@@ -216,7 +221,11 @@ What it does, and what bounds it:
   requested identity, the run ids and the provider's error text are compared in memory and cannot reach the
   rendered line; the message is dropped where the probe catches it, keeping only the exception type name and
   the classified state. A unit test asserts that a fixture id, run name and tenant url do not survive into the
-  line. The screen shows two counts; the structural detail goes to the XrmToolBox log.
+  line. **AM-36 changed where that answer appears:** after every run the plugin shows the whole block in its own
+  copyable window - window, both counts, the overlap, the verdict, what it means and any query failure - while
+  the status line keeps one short verdict sentence. The host log still receives the same text, at Information,
+  Warning or Error depending on what the environment did, but it is no longer the path anyone has to follow to
+  read the result; see "Reading the result out of the plugin" below.
 
 What each verdict means - and does not:
 
@@ -228,6 +237,27 @@ What each verdict means - and does not:
 | Rows both ways, none in common | something other than identity separated the two reads | investigate with the reported shapes; the probe does not explain it |
 | No rows either way | **inconclusive** | consistent with run-history ingestion off, retention shorter than a week, no `FlowRun` read permission, or a flow that genuinely did not run. The probe lists these and picks none |
 | A query refused | not an empty query | settle the coverage state first; `Unsupported` / `Unauthorized` wording already exists |
+
+### Reading the result out of the plugin (AM-36)
+
+The first live probe run answered `0 rows / 0 rows`, and the word that would have explained it travelled only in
+an Information-level log entry the host never wrote. These are the measured facts about where the answer lives
+now, so no future session has to rediscover them:
+
+| Fact | Value | Evidence |
+|---|---|---|
+| Where the answer appears | a modal "Run-history identity probe - result" window inside the tool, with a **Copy all** button (text pre-selected, so Ctrl+C works too), plus one verdict sentence on the status line | `FlowRunProbeReport.Build` in core; `ProbeReportForm` and `DiscoveryView.ShowProbeReport` in the plugin |
+| What the host log holds | the same block, written at Information, Warning or Error chosen from what the environment did: a clean empty read is Information; a query that could not be sent or two reads that contradict each other is Warning; a lost-access refusal is Error | `FlowRunProbeOutcome.Severity` feeding `LogProbeResult` |
+| Host logging default, measured | plugin entries below `Warning` are **not written at all**: `Settings\XrmToolBox.Settings.xml` carries `<LogLevel>Warning</LogLevel>`, and no `Logs\AutomationMonitor.Plugin.log` existed after the probe runs that "produced nothing" | read on the primary Windows host, 2026-11-11, against `XrmToolBox.Extensibility.LogManager` |
+| XrmToolBox build in use here | `1.2026.9.78`, storage root `%APPDATA%\MscrmTools\XrmToolBox` | read from disk 2026-11-11; still named per session, because an `/overridepath` install moves it |
+| What the block never contains | a flow id, a run id, an environment name or url, or provider message text - only counts, column names, CLR type names, state tokens and UTC timestamps | `FlowRunProbeReportTests` privacy cases |
+
+**What the runs so far say, and what they do not.** The maintainer pressed the probe on several flows. Most
+answered `no rows either way`; at least one returned rows on one side only. That one-sided verdict is precisely
+the evidence the identity question needs, and it was unreadable at the time - so **no column is called
+authoritative yet and the production filter has not moved**. `BothEmpty` on its own proves nothing about either
+column: it is equally consistent with a flow that did not run inside the window, a retention window shorter than
+seven days, run history not being stored in this environment, or a read this build cannot see.
 
 The spike settles the identity question only. `parentrunid`'s parent/child semantics (checklist item 8) remain
 a separate task, and a five-row ceiling says nothing about whether any window is complete.
@@ -293,7 +323,9 @@ to an environment itself.
    above did not know about: `flowrun.workflow`, a Lookup to `workflow` whose referenced key is exactly the
    identity discovery uses, and the local schema validation of the same table confirmed both columns exist.
    The question is now measured rather than reasoned about - run the identity probe above on one selected flow
-   and report its log line. Both filters returning the same runs settles both halves at once (the text stores
+   and copy the result window the plugin opens afterwards (AM-36). Do not look for it in the log panel or in
+   `Logs\`: the host leaves an Information-level plugin entry unwritten at its default level. Both filters
+   returning the same runs settles both halves at once (the text stores
    the primary id, not `workflowidunique`); the verdict table in "The AM-35 identity probe" says what every
    other answer means, and no answer licenses a change to the monitoring query by itself.
 

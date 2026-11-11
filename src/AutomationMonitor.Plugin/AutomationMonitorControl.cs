@@ -224,11 +224,14 @@ namespace AutomationMonitor.Plugin
         /// every other read uses, cancelable, and gone when the control is disposed.
         ///
         /// <para>
-        /// The screen gets a sentence with two counts, because a status line describes the environment rather
-        /// than this tool's reasoning. The structural detail - column shapes, paging, the verdict - goes to
-        /// the log, which is where a maintainer reads implementation detail without it becoming an operator's
-        /// problem. Neither line can carry an id, a name, an error message or a payload: the outcome type is
-        /// built from counts and codes, and the probe drops the provider message where it catches it.
+        /// AM-36: the result is shown in the plugin, not left in the host log. XrmToolBox writes plugin entries
+        /// to Logs\AutomationMonitor.Plugin.log only at Warning or above and its log level defaults to Warning,
+        /// so a diagnostic logged as Information is invisible - which is exactly how the first live probe run
+        /// lost its verdict. The copyable result window now carries the window, both counts, the overlap, the
+        /// verdict and any failure; the status line keeps one short sentence about the environment; and the log
+        /// keeps the same text at the severity Core computed. Nothing on any of them can carry an id, a name, an
+        /// error message or a payload: the outcome type is built from counts and codes, and the probe drops the
+        /// provider message where it catches it.
         /// </para>
         /// </summary>
         private void RunFlowRunProbe()
@@ -277,26 +280,56 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    // The detail belongs in the log; the status line stays about the environment.
-                    LogInfo(outcome.Describe());
+                    // AM-36: the result has to be readable from the plugin itself. XrmToolBox writes plugin log
+                    // entries only at Warning or above (its LogManager defaults to Warning), so a log line alone
+                    // was never a hand-back path. The report window carries the whole sanitized block with a Copy
+                    // button; the log keeps the same text at the severity the result actually earned.
+                    string report = FlowRunProbeReport.Build(outcome);
+                    LogProbeResult(outcome.Severity, report);
                     view.Say(ProbeSummary(outcome));
+                    view.ShowProbeReport(report);
                 }
             });
         }
 
         /// <summary>
-        /// The on-screen sentence: two counts, how many runs came back both ways, and where the detail is. It
-        /// calls a five-row sample what it is and never implies the window was read.
+        /// The on-screen sentence: the verdict in words, the two counts and the overlap. It calls a five-row
+        /// sample what it is, never implies the window was read, and never sends the operator to a log panel -
+        /// the result window opened beside it carries the detail.
         /// </summary>
         private static string ProbeSummary(FlowRunProbeOutcome outcome)
         {
-            return "Probe read " + outcome.StringFilter.Rows.ToString() + " row(s) through the text filter and "
-                + outcome.LookupFilter.Rows.ToString() + " row(s) through the lookup filter; "
-                + outcome.OverlapCount.ToString() + " run(s) came back both ways. "
-                + (outcome.IsInconclusive
-                    ? "Identity question still open - this probe does not say why."
-                    : "Both filters answered; see the log for the shapes.")
-                + " Structural detail is in the XrmToolBox log.";
+            string failures = outcome.StringFilter.Failure != null || outcome.LookupFilter.Failure != null
+                ? " A query was refused, so these counts do not measure what this flow has run."
+                : string.Empty;
+
+            return "Probe - " + outcome.VerdictLabel + ": "
+                + outcome.StringFilter.Rows.ToString() + " row(s) through the text filter, "
+                + outcome.LookupFilter.Rows.ToString() + " row(s) through the lookup filter, "
+                + outcome.OverlapCount.ToString() + " run(s) returned by both queries."
+                + failures
+                + " Full result: the probe window that just opened, with a Copy all button.";
+        }
+
+        /// <summary>
+        /// One place decides how loudly the host speaks about a probe result, from the severity Core computed.
+        /// A routine empty answer stays Information: raising it to Warning to force a log file would make the
+        /// log say "attention needed" when nothing does, and the copyable window already carries the answer.
+        /// </summary>
+        private void LogProbeResult(ProbeReportSeverity severity, string report)
+        {
+            switch (severity)
+            {
+                case ProbeReportSeverity.Error:
+                    LogError(report);
+                    break;
+                case ProbeReportSeverity.Warning:
+                    LogWarning(report);
+                    break;
+                default:
+                    LogInfo(report);
+                    break;
+            }
         }
 
         private void BindSolutionChoices()

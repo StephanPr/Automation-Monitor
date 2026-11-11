@@ -153,6 +153,29 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             get { return WasAttempted && Failure == null && Rows > 0; }
         }
 
+        /// <summary>
+        /// The one wording for what happened to this query: "answered", "not sent", or "refused: &lt;state&gt;".
+        /// The report and the log line both take it from here, so a state can never be described two ways -
+        /// and a refused query can never be rendered as an empty one.
+        /// </summary>
+        public string StateLabel
+        {
+            get
+            {
+                if (!WasAttempted)
+                {
+                    return "not sent";
+                }
+
+                if (Failure != null)
+                {
+                    return "refused: " + ProviderResultStates.Token(Failure.Value);
+                }
+
+                return "answered";
+            }
+        }
+
         /// <summary>The shape of the run ids this read returned.</summary>
         public ProbeValueShape RunIdShape
         {
@@ -178,14 +201,27 @@ namespace AutomationMonitor.Core.Providers.Dataverse
     /// lookup column (the documented join) - plus the verdict those two answers support.
     ///
     /// <para>
-    /// <see cref="Describe"/> is the whole output and it is structural by construction: counts, column
-    /// names, CLR type names and state codes. The requested identity, the run ids and the error text are
-    /// compared in memory and cannot reach the rendered line; a unit test asserts exactly that.
+    /// Everything rendered is structural by construction: counts, column names, CLR type names and state
+    /// codes. The requested identity, the run ids and the error text are compared in memory and cannot reach
+    /// a rendered line; a unit test asserts exactly that.
+    /// </para>
+    ///
+    /// <para>
+    /// AM-36 added the two members the hand-back actually depends on: <see cref="VerdictLabel"/> with
+    /// <see cref="Explanation"/> (what the maintainer reads on screen, worded differently for every state so
+    /// an empty answer is never mistaken for a cause) and <see cref="Severity"/> (how loudly the host should
+    /// speak about it). <see cref="FlowRunProbeReport.Build"/> turns all of it into the copyable block;
+    /// <see cref="Describe"/> stays the single-line form for the host log.
     /// </para>
     /// </summary>
     public sealed class FlowRunProbeOutcome
     {
-        public FlowRunProbeOutcome(FlowRunProbeRead stringFilter, FlowRunProbeRead lookupFilter, string? requestedWorkflowId)
+        public FlowRunProbeOutcome(
+            FlowRunProbeRead stringFilter,
+            FlowRunProbeRead lookupFilter,
+            string? requestedWorkflowId,
+            DateTimeOffset? windowFromUtc = null,
+            DateTimeOffset? windowToUtc = null)
         {
             if (stringFilter == null)
             {
@@ -207,6 +243,8 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
             Guid parsed;
             RequestedIdentityIsGuid = RequestedWorkflowId != null && Guid.TryParse(RequestedWorkflowId, out parsed);
+            WindowFromUtc = windowFromUtc == null ? (DateTimeOffset?)null : windowFromUtc.Value.ToUniversalTime();
+            WindowToUtc = windowToUtc == null ? (DateTimeOffset?)null : windowToUtc.Value.ToUniversalTime();
         }
 
         /// <summary>Query A: filtered on the <c>workflowid</c> text column.</summary>
@@ -220,6 +258,16 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
         /// <summary>Whether that identity can be used as a lookup value at all.</summary>
         public bool RequestedIdentityIsGuid { get; }
+
+        /// <summary>
+        /// Start of the window the queries were given, in UTC, when the caller recorded it. A probe run
+        /// without a window cannot be interpreted later, so the report says "not recorded" rather than
+        /// inventing one.
+        /// </summary>
+        public DateTimeOffset? WindowFromUtc { get; }
+
+        /// <summary>End of the window the queries were given, in UTC. Also the instant the read happened.</summary>
+        public DateTimeOffset? WindowToUtc { get; }
 
         /// <summary>Distinct run ids that came back from both queries.</summary>
         public int OverlapCount
@@ -291,6 +339,67 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         }
 
         /// <summary>
+        /// The verdict in words, for the status line and the result window. Every state has its own label:
+        /// "no rows either way", "a query was refused" and "only one query could be sent" must never collapse
+        /// into one "inconclusive" that the operator has to interpret.
+        /// </summary>
+        public string VerdictLabel
+        {
+            get { return LabelFor(Verdict); }
+        }
+
+        /// <summary>
+        /// What this result does and does not establish, as plain text the plugin can show on its own. Two
+        /// wording rules hold across every state: no state may suggest that zero rows means the flow has
+        /// never executed, and no state may name a cause this read cannot actually see.
+        /// </summary>
+        public string Explanation
+        {
+            get { return Explain(Verdict); }
+        }
+
+        /// <summary>
+        /// How loudly the host should speak about this result. The levels mean what they normally mean: an
+        /// empty answer the environment really did give is information, a query that could not be sent or two
+        /// reads that came back disagreeing is a warning, and a refusal that says "you may not read this" is
+        /// an error. Nothing here is promoted merely to make a log file appear - the copyable result window
+        /// AM-36 added is what makes the answer reachable, independent of the host's log level.
+        /// </summary>
+        public ProbeReportSeverity Severity
+        {
+            get
+            {
+                if (StringFilter.Failure == ProviderResultState.Unauthorized
+                    || LookupFilter.Failure == ProviderResultState.Unauthorized)
+                {
+                    return ProbeReportSeverity.Error;
+                }
+
+                if (StringFilter.Failure != null || LookupFilter.Failure != null)
+                {
+                    return ProbeReportSeverity.Warning;
+                }
+
+                ProbeVerdict verdict = Verdict;
+                if (verdict == ProbeVerdict.NotAttempted || verdict == ProbeVerdict.Incomplete)
+                {
+                    // The experiment could not be run as designed. That is a fault in the question this build
+                    // asked, not a routine empty answer, and reading it as one would hide a defect.
+                    return ProbeReportSeverity.Warning;
+                }
+
+                if (verdict == ProbeVerdict.BothDiffer)
+                {
+                    // Two filters on one table disagreeing about the same flow is the anomaly this probe
+                    // exists to catch; it deserves a louder entry than a settled answer.
+                    return ProbeReportSeverity.Warning;
+                }
+
+                return ProbeReportSeverity.Information;
+            }
+        }
+
+        /// <summary>
         /// The single line the maintainer copies back. Everything on it is a count, a column name, a CLR
         /// type name or a state code - never an id, a name, an error message or a payload.
         /// </summary>
@@ -310,7 +419,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 .Append(" run id(s) returned by both queries; requested identity is ")
                 .Append(RequestedIdentityIsGuid ? "guid-shaped" : "not guid-shaped")
                 .Append(". Verdict: ")
-                .Append(VerdictLabel(Verdict));
+                .Append(LabelFor(Verdict));
 
             string? caveat = CaveatFor(Verdict);
             if (caveat != null)
@@ -321,7 +430,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             return text.ToString();
         }
 
-        private static string VerdictLabel(ProbeVerdict verdict)
+        private static string LabelFor(ProbeVerdict verdict)
         {
             switch (verdict)
             {
@@ -341,6 +450,59 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                     return "both filters return the same runs";
                 default:
                     return "both filters returned rows but none in common";
+            }
+        }
+
+        /// <summary>
+        /// What the maintainer reads on screen (AM-36). Every state gets its own sentence, and three states in
+        /// particular must not read alike: an empty answer, a refused query and an experiment that could not be
+        /// sent are three different problems with three different next actions.
+        ///
+        /// <para>
+        /// Standing wording rule: no state may suggest that zero rows proves the flow has never executed, and
+        /// no state may name a cause this read cannot see - ingestion settings, retention and permissions are
+        /// all invisible to a two-query probe.
+        /// </para>
+        /// </summary>
+        private static string Explain(ProbeVerdict verdict)
+        {
+            switch (verdict)
+            {
+                case ProbeVerdict.NotAttempted:
+                    return "Neither query was sent, so the experiment did not run. Nothing here says anything "
+                        + "about either column, and the reason is in how the probe was asked for, not in the "
+                        + "environment's data.";
+                case ProbeVerdict.Incomplete:
+                    return "Only one of the two queries could be sent, so this is not a comparison yet. One "
+                        + "column answering by itself cannot say which of the two is authoritative, whatever "
+                        + "the count on that side was.";
+                case ProbeVerdict.Refused:
+                    return "At least one query was refused. A refused read is not an empty read: the counts on "
+                        + "this report do not measure what this flow has run, and the identity question stays "
+                        + "open until both queries answer.";
+                case ProbeVerdict.BothEmpty:
+                    return "Both queries were sent and the environment answered with no rows for this window. "
+                        + "That is not evidence that the flow has never run, and it is not evidence about "
+                        + "which column is authoritative: a flow that did not run in this window, a retention "
+                        + "window shorter than this one, run history not being stored in this environment and a "
+                        + "read this build cannot see would all answer exactly the same way here.";
+                case ProbeVerdict.TextOnly:
+                    return "Only the text-column filter returned rows. For this flow the filter the monitoring "
+                        + "query uses today does find run rows; the lookup column being empty in this window "
+                        + "does not by itself show that it is never populated.";
+                case ProbeVerdict.LookupOnly:
+                    return "Only the lookup-column filter returned rows, so the filter the monitoring query uses "
+                        + "today would find nothing for this flow. That is evidence the production filter needs "
+                        + "its own change task with its own tests; this probe does not change it.";
+                case ProbeVerdict.BothAgree:
+                    return "Both filters returned rows and at least one run came back through both, so both "
+                        + "columns carry this flow's identity. The filter the monitoring query uses today can "
+                        + "find runs for this flow.";
+                default:
+                    return "Both filters returned rows but not one run id in common. Two filters on one table "
+                        + "disagreeing about the same flow is not something the schema explains on its own; the "
+                        + "column shapes reported below are the evidence to act on, and this result does not say "
+                        + "which filter is the wrong one.";
             }
         }
 
@@ -593,7 +755,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
             if (!read.WasAttempted)
             {
-                text.Append("not sent");
+                text.Append(read.StateLabel);
                 if (!string.IsNullOrWhiteSpace(read.NotAttemptedReason))
                 {
                     text.Append(" (").Append(Safe(read.NotAttemptedReason)).Append(')');
@@ -604,7 +766,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
 
             if (read.Failure != null)
             {
-                text.Append("refused: ").Append(ProviderResultStates.Token(read.Failure.Value));
+                text.Append(read.StateLabel);
                 if (!string.IsNullOrWhiteSpace(read.FailureKind))
                 {
                     text.Append(" (").Append(Safe(read.FailureKind)).Append(')');

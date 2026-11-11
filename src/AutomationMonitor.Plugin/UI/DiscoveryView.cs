@@ -215,6 +215,28 @@ namespace AutomationMonitor.Plugin.UI
             CoverageLabel.Text = message;
         }
 
+        /// <summary>
+        /// AM-36: shows the probe's decisive numbers inside the plugin. The host log is not a hand-back path an
+        /// operator can be pointed at - XrmToolBox keeps plugin entries at Warning or above unless its log level
+        /// is raised - so the result has to be readable and copyable where the run happened. The text is Core's;
+        /// this view only displays it.
+        /// </summary>
+        public void ShowProbeReport(string report)
+        {
+            using (ProbeReportForm form = new ProbeReportForm(report))
+            {
+                Form? owner = FindForm();
+                if (owner != null)
+                {
+                    form.ShowDialog(owner);
+                }
+                else
+                {
+                    form.ShowDialog();
+                }
+            }
+        }
+
         /// <summary>The watchlist line always comes from the shared core summary, never from view wording.</summary>
         public void ShowWatchlist(Watchlist watchlist)
         {

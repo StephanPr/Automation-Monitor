@@ -152,8 +152,12 @@ roadmap item WF-A.9 rather than a reason to widen the status line.
 
 Run history for solution-aware cloud flows is replicated into the Dataverse `flowrun` table, and
 `DataverseFlowRunSource` reads it. Every fact below comes from the Microsoft Learn FlowRun entity
-reference and the run-history article, retrieved 2026-10-31. **None of it has been executed against
-a tenant from this host**: the code and its tests are verified, the round trip is not.
+reference and the run-history article, retrieved 2026-10-31. **The column shapes below have since been seen on
+live rows**: the AM-35 diagnostic probe read this table on 2026-11-12 and reported the CLR type of every column
+it projected (see "The first live answer"). That is not the monitoring path having run.
+`DataverseFlowRunSource`, `RunQueryService`, `DataverseRunNormalizer`, the correlation resolver and any grid
+**have still never been executed against a tenant from this host**, and there is still no run grid: the code and
+its tests are verified, the production round trip is not.
 
 | Fact | Value | Evidence | Status |
 |---|---|---|---|
@@ -162,8 +166,8 @@ a tenant from this host**: the code and its tests are verified, the round trip i
 | Run identifier | `name`, String(100) — the Logic Apps run name of the execution | Same, plus the run-history article | Chosen as `WorkflowRun.RunId` because `parentrunid` points at this value |
 | Parent link | `parentrunid`, String(100) | Same | the only parent/child evidence used |
 | Tracking id | `clienttrackingid`, String(255) | Same | becomes `WorkflowRun.CorrelationId`; there is **no** `correlationid` column |
-| Owning flow, as text | `workflowid`, String(100), documented as "unique identifier of the workflow associated with this run" | FlowRun entity reference, re-read 2026-11-10, cross-checked against the local schema validation of the same table | The production run query filters on this column. Which of the workflow table's identifiers the text actually stores is **not documented**, and the table exposes three - so it is measured, not assumed; see "The AM-35 identity probe" below. A row naming another flow is refused, not merged |
-| Owning flow, as a lookup | `workflow`, Lookup to `workflow`, RequiredLevel **None** | Same | The join the platform documents: the referenced primary key is `workflow.workflowid`, which is exactly the value discovery uses as workflow identity. **Not** projected by the monitoring query - only by the probe (`DataverseSchema.RunProbeAttributes`) - because a projected column is a contract with the platform and the production projection is already proven live |
+| Owning flow, as text | `workflowid`, String(100), documented as "unique identifier of the workflow associated with this run" | FlowRun entity reference, re-read 2026-11-10, cross-checked against the local schema validation of the same table | The production run query filters on this column. Which of the workflow table's identifiers the text actually stores is **not documented**, and the table exposes three - so it was measured, not assumed; see "The AM-35 identity probe" below. **Measured 2026-11-12:** on the probed flow every sampled run row's `workflowid` equalled the identity discovery produces, so the production filter is on the right column with the right value spelling. A row naming another flow is refused, not merged |
+| Owning flow, as a lookup | `workflow`, Lookup to `workflow`, RequiredLevel **None** | Same | The join the platform documents: the referenced primary key is `workflow.workflowid`, which is exactly the value discovery uses as workflow identity. **Not** projected by the monitoring query - only by the probe (`DataverseSchema.RunProbeAttributes`) - because a projected column is a contract with the platform and the production projection is already proven live. **Observed 2026-11-12:** the probe's filter on this column returned no rows for an identity that its text filter matched, while the column itself arrived as an `EntityReference` on sampled rows. That is **unresolved filter behaviour, not a disproof of the documented relationship** - see "The first live answer" |
 | Flow platform kind | `modernflowtype`, Picklist `flowrun_modernflowtype`: `0` PowerAutomateFlow, `1` CopilotStudioFlow, `2` M365CopilotAgentFlow | Same, re-read 2026-11-10 | **Not projected and not filtered on.** It would not narrow this read: a flow's platform kind is a property of the flow, and discovery already selects `workflow.category = 5`. Recorded so that adding it later is a decision rather than a guess |
 | Flow display name | not a `flowrun` column (`flowname` does not exist) | Column-list scan of the entity reference | the name comes from the request scope; without it the row reads `(unnamed workflow)` |
 | Duration | `duration`, **BigInt**, milliseconds (schema name `DurationInMs`) | Same | **not seconds**; read type-tolerantly as `long`, never rescaled |
@@ -190,7 +194,7 @@ connecting user's zone. The gateway therefore sends the window widened by ±1 da
 half-open `[from, to)` window to every row. A widened read costs a few discarded rows; a narrowed one
 would silently hide runs, which is the asymmetry that decision is based on.
 
-### The AM-35 identity probe (bounded diagnostic; deployed, answer owed)
+### The AM-35 identity probe (bounded diagnostic; answered for one flow)
 
 `flowrun` documents two columns that each claim to name the owning flow, and only one of them can hold the
 identity discovery produces. That is not a detail: the monitoring query filters on the text column, so if that
@@ -232,7 +236,7 @@ What each verdict means - and does not:
 | Verdict | Observation | Next step |
 |---|---|---|
 | Both filters return the same runs | the text column stores the primary id discovery uses; for this table the two are interchangeable | moving the production filter to the documented lookup is a separate change with its own tests |
-| Only the text filter returns rows | the lookup column is not populated, or not queryable, in this environment | keep the text filter and record that the documented join is unusable here |
+| Only the text filter returns rows | the documented join did not match this identity in this environment; the column may or may not be populated, which this verdict alone cannot tell | keep the text filter and record the lookup's filter behaviour as unresolved - a zero answer is not evidence that the relationship is invalid |
 | Only the lookup filter returns rows | the text column holds something else - another workflow identifier, or nothing | the monitoring filter is wrong for this environment; open the fix as its own task |
 | Rows both ways, none in common | something other than identity separated the two reads | investigate with the reported shapes; the probe does not explain it |
 | No rows either way | **inconclusive** | consistent with run-history ingestion off, retention shorter than a week, no `FlowRun` read permission, or a flow that genuinely did not run. The probe lists these and picks none |
@@ -253,14 +257,64 @@ now, so no future session has to rediscover them:
 | What the block never contains | a flow id, a run id, an environment name or url, or provider message text - only counts, column names, CLR type names, state tokens and UTC timestamps | `FlowRunProbeReportTests` privacy cases |
 
 **What the runs so far say, and what they do not.** The maintainer pressed the probe on several flows. Most
-answered `no rows either way`; at least one returned rows on one side only. That one-sided verdict is precisely
-the evidence the identity question needs, and it was unreadable at the time - so **no column is called
-authoritative yet and the production filter has not moved**. `BothEmpty` on its own proves nothing about either
-column: it is equally consistent with a flow that did not run inside the window, a retention window shorter than
-seven days, run history not being stored in this environment, or a read this build cannot see.
+answered `no rows either way`; on 2026-11-12 one flow returned rows on one side only - `TextOnly`, recorded in full
+in "The first live answer" below. That is the evidence the identity question needed, and for the flow and
+environment observed it settles the filter choice: the text column is the one that works, and production keeps it.
+`BothEmpty` on its own proves nothing about either column: it is equally consistent with a flow that did not run
+inside the window, a retention window shorter than seven days, run history not being stored in this environment, or
+a read this build cannot see - so the `no rows either way` population remains unexplained, which is what roadmap
+WF-A.10 exists for.
 
 The spike settles the identity question only. `parentrunid`'s parent/child semantics (checklist item 8) remain
 a separate task, and a five-row ceiling says nothing about whether any window is complete.
+
+### The first live answer (2026-11-12): the text filter finds runs
+
+The maintainer probed one solution-aware cloud flow in the test environment (XrmToolBox `1.2026.9.78`, build
+`0.1.0+f07ee70`, source revision `f07ee704dbe2`) and pasted the AM-36 result window back. The scope is narrow and
+is not extended by inference: **one flow, one environment, one seven-day window, a five-row ceiling per query.**
+
+| Reported field | Value | What it establishes |
+|---|---|---|
+| Verdict | `TextOnly` - only the text-column filter returned runs | The spike question is answered for this flow: production filters on the column that works. |
+| Query A (`flowrun.workflowid` text) | 5 rows, 5 distinct run ids, ceiling reached so labelled a sample | The monitoring filter returns rows for a flow that has runs. |
+| `text id vs requested` | `all values are the requested identity` | The text column stores the same value `workflow.workflowid` discovery uses - the question the entity reference cannot settle. |
+| Query B (`flowrun.workflow` lookup) | 0 rows, answered, no failure | A zero, not a refusal and not a paging fault: the two reads differ only by the column they filtered on. |
+| `lookup column arrived` | `yes`, with `workflow=EntityReference` among the shapes | The lookup arrived on rows the text filter returned, so B's zero is **not** "the column is empty". |
+| `Failures` | `none - both queries were sent and the environment answered` | Neither zero is a coverage artefact. |
+
+**The decision recorded here.** The `flowrun` monitoring filter stays on the text `workflowid` column, and no
+production change task is opened by this result: the two verdicts that would have forced one - runs only through
+the lookup, or two different sets of runs - did not occur.
+
+**What stays unresolved, deliberately.** Why the lookup filter matched nothing is not established, and none of
+these is ruled in or out: the reference may carry an identifier other than the one requested; it may target a
+table other than `workflow`; or an `Equal` filter on a lookup column of an elastic, non-transactional table may
+simply not behave as the schema reading implies. **The documented join stands** - what was measured is that this
+build's lookup filter did not match this identity in this environment. Re-measuring it is a legitimate later task
+with its own evidence; nothing here forbids it.
+
+**One limit of the shape evidence.** The probe tallies one CLR type per column from the last row that carried it,
+so `workflow=EntityReference` means *at least one* of the five sampled rows held a value, not that all five did.
+That is precisely why the zero cannot be read as an unpopulated column.
+
+**Column shapes seen on live rows**, every one matching the declared type above: `flowrunid=Guid`, `name=String`,
+`workflowid=String`, `status=String`, `starttime=DateTime`, `endtime=DateTime`, `duration=Int64`,
+`triggertype=String`, `isprimary=Int32`, `clienttrackingid=String`, `partitionid=String`, `versionnumber=Int64`,
+`workflow=EntityReference`. This retires the "this build guessed a column type wrong" risk class on the projected
+set - the class that cost every flow row in the 2026-11-09 session - without validating anything downstream of
+the read.
+
+**What this read is not.** These are the diagnostic probe's own rows, projected by
+`DataverseSchema.RunProbeAttributes` and reduced by the gateway's unwrapping rule. Production run history -
+`DataverseFlowRunSource` into `DataverseRunNormalizer`, `RunQueryService`, correlation, and any grid - has still
+never run against a tenant, and there is no run grid to run it in. Observed shapes are not pipeline validation;
+that is what the M3 UI pass exists to prove.
+
+**Also implied, and still owed.** The probe acts only on a flow selected in the discovery grid, so a flow row did
+reach the screen and its identity reached the probe - the first live sign the AM-34 identity fix works. Row
+counts, the identity-source tally and layout at 100/150/200 percent scaling were not reported, so roadmap §3 item
+4 and the direct WF-A.7 discovery report stay open.
 
 ### Coverage limits this milestone must keep admitting
 

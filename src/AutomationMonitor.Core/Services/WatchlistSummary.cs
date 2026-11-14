@@ -16,15 +16,15 @@ namespace AutomationMonitor.Core.Services
         /// Placeholder shown when there is no list to describe.
         ///
         /// <para>
-        /// Wording change in M4, with the product reason: until now nothing could be written at all, and
-        /// the old sentence said so. Saved watchlists exist from M4 on, so the promise it made would be
-        /// false. What stays true, and what this line still says, is that an unsaved in-memory list is not
-        /// on disk and nothing is being monitored.
+        /// Wording revised in C6, with the product reason: watchlists can now be saved from the interface,
+        /// so this line must no longer imply that nothing is ever written - saved lists may already sit on
+        /// disk for this environment. What it honestly states is only about the current state: no list is
+        /// selected, so nothing is being monitored yet.
         /// </para>
         /// </summary>
         public static string Empty
         {
-            get { return "No watchlist selected. Nothing is being monitored, and nothing is saved."; }
+            get { return "No watchlist selected. Nothing is being monitored yet."; }
         }
 
         public static string Describe(Watchlist? watchlist)
@@ -36,7 +36,7 @@ namespace AutomationMonitor.Core.Services
 
             StringBuilder text = new StringBuilder();
             text.Append("Watchlist \"").Append(watchlist.Name).Append("\" - ")
-                .Append(watchlist.MonitoredFlowCount.ToString(CultureInfo.InvariantCulture)).Append(" flow(s) monitored of ")
+                .Append(watchlist.MonitoredFlowCount.ToString(CultureInfo.InvariantCulture)).Append(" flow(s) selected of ")
                 .Append(watchlist.Members.Count.ToString(CultureInfo.InvariantCulture)).Append(" member(s) - ")
                 .Append(WatchlistMembershipModes.Describe(watchlist.Mode)).Append(" - ")
                 .Append(SourceStatus.Label(watchlist.State));

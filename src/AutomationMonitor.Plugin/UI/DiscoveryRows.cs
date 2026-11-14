@@ -35,6 +35,30 @@ namespace AutomationMonitor.Plugin.UI
     }
 
     /// <summary>
+    /// One entry of the saved-watchlist combo (C6). The label is a display string; the id is the stored
+    /// identity the host opens by. The id is kept off the label so a name can never be mistaken for an
+    /// identifier, and the combo is filled per environment so it only ever offers lists scoped to the
+    /// connected environment.
+    /// </summary>
+    public sealed class SavedWatchlistChoice
+    {
+        public SavedWatchlistChoice(string id, string label)
+        {
+            Id = id ?? throw new ArgumentNullException(nameof(id));
+            Label = label;
+        }
+
+        public string Id { get; }
+
+        public string Label { get; }
+
+        public override string ToString()
+        {
+            return Label;
+        }
+    }
+
+    /// <summary>
     /// One grid row. Every value is a pre-formatted string built from a core record: provider
     /// text stays data, and no provider value is ever interpreted or composed into a path or URL.
     /// </summary>

@@ -847,7 +847,11 @@ Implemented shape (milestone M4, core plus the plugin's disk layer): one file, `
 plugin's own `AutomationMonitor` folder under the host's settings directory - the directory the XrmToolBox
 host reports for its settings, with a single documented override and a refusal when neither is available -
 holding the watchlists, the per-environment active selection and the application defaults together so a save
-cannot leave the halves out of step.
+cannot leave the halves out of step. As of C6 the discovery screen is the store's first caller: it saves the
+watchlist it built under a chosen name (scoped to the connected environment, snapshot membership), lists the
+lists saved for that environment, and opens one from the loaded catalogue without re-querying the solution. The
+list line reads "N flow(s) selected" - not "monitored" - because a saved list is a selection, not a running
+monitor; the fuller Watchlists view (reconciliation preview, management) is still future behaviour.
 
 - Every record carries `schemaVersion` and a `kind` discriminator. A file written by a newer version, one
   whose schema is too old, one that cannot be parsed, one truncated mid-write, and one that does not

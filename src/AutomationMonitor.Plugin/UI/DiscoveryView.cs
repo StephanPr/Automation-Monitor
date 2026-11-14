@@ -19,7 +19,7 @@ namespace AutomationMonitor.Plugin.UI
             SuspendLayout();
 
             SolutionsButton = new Button { Text = "1. Load solutions", Dock = DockStyle.Left, Width = 132, Height = 28 };
-            FlowsButton = new Button { Text = "2. Load flows", Dock = DockStyle.Left, Width = 112, Height = 28, Enabled = false };
+            FlowsButton = new Button { Text = "2. Load solution flows", Dock = DockStyle.Left, Width = 150, Height = 28, Enabled = false };
             WatchlistButton = new Button { Text = "3. Build watchlist", Dock = DockStyle.Left, Width = 132, Height = 28, Enabled = false };
             CancelButton = new Button { Text = "Cancel", Dock = DockStyle.Right, Width = 84, Height = 28, Enabled = false };
 
@@ -31,7 +31,7 @@ namespace AutomationMonitor.Plugin.UI
             SearchBox = new TextBox { Dock = DockStyle.Right, Width = 210 };
             Label searchHint = new Label { Text = "Filter:", Dock = DockStyle.Right, Width = 46, TextAlign = ContentAlignment.MiddleRight };
 
-            Panel buttonHost = new Panel { Dock = DockStyle.Left, Width = 380 };
+            Panel buttonHost = new Panel { Dock = DockStyle.Left, Width = 420 };
             buttonHost.Controls.Add(WatchlistButton);
             buttonHost.Controls.Add(FlowsButton);
             buttonHost.Controls.Add(SolutionsButton);
@@ -65,7 +65,7 @@ namespace AutomationMonitor.Plugin.UI
             FlowGrid.Columns.Add(NewColumn("Modified (UTC)", nameof(FlowRow.ModifiedOnUtc), 180));
 
             StatusLabel = new Label { Dock = DockStyle.Top, Height = 24, AutoEllipsis = true, Text = "Connect to a Dataverse environment to begin." };
-            CoverageLabel = new Label { Dock = DockStyle.Bottom, Height = 24, AutoEllipsis = true, Text = "No watchlist built yet. Nothing is written to disk in this milestone." };
+            CoverageLabel = new Label { Dock = DockStyle.Bottom, Height = 24, AutoEllipsis = true, Text = "No watchlist yet. Build one from the selected solution, or open a saved watchlist." };
 
             // Selection state is control state, so the view decides only whether an action is clickable -
             // never what a probe means or what it will ask the environment for.
@@ -83,6 +83,27 @@ namespace AutomationMonitor.Plugin.UI
             probeRow.Controls.Add(probeHint);
             probeRow.Controls.Add(ProbeButton);
 
+            // The C6 persistence row, kept directly under the discovery steps and never styled as another
+            // step: name the built watchlist and save it, or open one already saved for this environment.
+            // Counts, membership mode and status are Core wording - this row only paints them.
+            Label saveHint = new Label { Text = "Save as:", Dock = DockStyle.Left, Width = 56, TextAlign = ContentAlignment.MiddleLeft };
+            WatchlistNameBox = new TextBox { Dock = DockStyle.Left, Width = 200 };
+            SaveWatchlistButton = new Button { Text = "Save watchlist", Dock = DockStyle.Left, Width = 108, Height = 26, Enabled = false };
+            Label savedHint = new Label { Text = "Saved:", Dock = DockStyle.Left, Width = 48, TextAlign = ContentAlignment.MiddleLeft };
+            SavedWatchlists = new ComboBox { Dock = DockStyle.Left, Width = 236, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = nameof(SavedWatchlistChoice.Label) };
+            OpenWatchlistButton = new Button { Text = "Open", Dock = DockStyle.Left, Width = 60, Height = 26, Enabled = false };
+            WatchlistStateLabel = new Label { Dock = DockStyle.Right, Width = 200, TextAlign = ContentAlignment.MiddleRight, AutoEllipsis = true, Text = "Nothing to save yet" };
+            SavedWatchlists.SelectedIndexChanged += (sender, args) => UpdateOpenEnabled();
+
+            Panel watchlistRow = new Panel { Dock = DockStyle.Top, Height = 38, Padding = new Padding(8, 6, 8, 4) };
+            watchlistRow.Controls.Add(WatchlistStateLabel);
+            watchlistRow.Controls.Add(OpenWatchlistButton);
+            watchlistRow.Controls.Add(SavedWatchlists);
+            watchlistRow.Controls.Add(savedHint);
+            watchlistRow.Controls.Add(SaveWatchlistButton);
+            watchlistRow.Controls.Add(WatchlistNameBox);
+            watchlistRow.Controls.Add(saveHint);
+
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 52 };
             footer.Controls.Add(StatusLabel);
             footer.Controls.Add(CoverageLabel);
@@ -90,6 +111,7 @@ namespace AutomationMonitor.Plugin.UI
             Controls.Add(FlowGrid);
             Controls.Add(footer);
             Controls.Add(probeRow);
+            Controls.Add(watchlistRow);
             Controls.Add(toolbar);
 
             ResumeLayout(true);
@@ -104,6 +126,18 @@ namespace AutomationMonitor.Plugin.UI
 
         /// <summary>The AM-35 diagnostic action, disabled until a flow row is selected.</summary>
         public Button ProbeButton { get; }
+
+        // C6 persistence controls: name and save the built watchlist, or open one already saved for this
+        // environment. They hold no logic - the host control drives them and Core supplies the wording.
+        public TextBox WatchlistNameBox { get; }
+
+        public Button SaveWatchlistButton { get; }
+
+        public ComboBox SavedWatchlists { get; }
+
+        public Button OpenWatchlistButton { get; }
+
+        public Label WatchlistStateLabel { get; }
 
         public ComboBox SolutionSelector { get; }
 
@@ -201,8 +235,86 @@ namespace AutomationMonitor.Plugin.UI
             CancelButton.Enabled = isBusy;
             SolutionSelector.Enabled = !isBusy;
             SearchBox.Enabled = !isBusy;
+            WatchlistNameBox.Enabled = !isBusy;
+            SavedWatchlists.Enabled = !isBusy;
+            if (isBusy)
+            {
+                // A read in flight must not be raced by a save or an open; the host re-enables them once
+                // it knows what is selected, so a busy pass never grants them back on its own.
+                SaveWatchlistButton.Enabled = false;
+                OpenWatchlistButton.Enabled = false;
+            }
+
             UseWaitCursor = isBusy;
             UpdateProbeEnabled();
+        }
+
+        /// <summary>
+        /// Fill the "Saved" combo for the connected environment. The id is kept off the label so a display
+        /// name can never be read as an identity; the host opens strictly by id. The current pick survives
+        /// a refresh when it still exists, else the selection clears.
+        /// </summary>
+        public void BindSavedWatchlists(IEnumerable<SavedWatchlistChoice> choices, string? keepSelectedId)
+        {
+            SavedWatchlists.BeginUpdate();
+            SavedWatchlists.Items.Clear();
+            foreach (SavedWatchlistChoice choice in choices)
+            {
+                SavedWatchlists.Items.Add(choice);
+            }
+
+            SavedWatchlists.SelectedIndex = IndexOfSavedId(keepSelectedId);
+            SavedWatchlists.EndUpdate();
+            UpdateOpenEnabled();
+        }
+
+        /// <summary>The id of the highlighted saved watchlist, or null when none is picked.</summary>
+        public string? SelectedSavedWatchlistId
+        {
+            get
+            {
+                SavedWatchlistChoice? choice = SavedWatchlists.SelectedItem as SavedWatchlistChoice;
+                return choice == null ? null : choice.Id;
+            }
+        }
+
+        /// <summary>
+        /// Paint the short saved / not-saved / modified token. The wording is the caller's, derived from
+        /// Core state in the host control - the view never invents its own meaning for a storage outcome.
+        /// </summary>
+        public void SetWatchlistState(string state)
+        {
+            WatchlistStateLabel.Text = state;
+        }
+
+        /// <summary>One rule for when Save may be clicked, so no path leaves it enabled over nothing.</summary>
+        public void SetSaveEnabled(bool enabled)
+        {
+            SaveWatchlistButton.Enabled = !busy && enabled;
+        }
+
+        private void UpdateOpenEnabled()
+        {
+            OpenWatchlistButton.Enabled = !busy && SelectedSavedWatchlistId != null;
+        }
+
+        private int IndexOfSavedId(string? id)
+        {
+            if (id == null)
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < SavedWatchlists.Items.Count; i++)
+            {
+                SavedWatchlistChoice candidate = (SavedWatchlistChoice)SavedWatchlists.Items[i];
+                if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         public void Say(string message)

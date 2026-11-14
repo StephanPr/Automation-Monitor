@@ -415,6 +415,37 @@ public sealed class DiskSettingsFileAccessTests : IDisposable
     }
 
     [Fact]
+    public void AnInterruptedBackupRotationLeavesTheLiveFileRecoverable()
+    {
+        // Section-4 review of DiskSettingsFileAccess.TryMove. Replacing an existing target is
+        // delete-then-move, and the ONLY move in a save that can have a pre-existing target is the
+        // backup rotation - moving the live file onto watchlists.json.bak. This pins the crash window
+        // inside that one call: the older backup has just been deleted, and the live file has not yet
+        // been moved onto its name. The live file is the newest committed copy, so it must survive.
+        Assert.True(Store().Write(CatalogOf("First")).IsUsable);
+        Assert.True(Store().Write(CatalogOf("Second")).IsUsable);   // watchlists.json = Second, .bak = First
+
+        // Freeze the exact on-disk state that interruption produces: live file untouched (the move never
+        // ran), the older backup gone (the delete ran), and the save's scratch write left un-moved.
+        File.Delete(Path.Combine(_root, BackupName));
+        File.WriteAllText(Path.Combine(_root, PendingName), "{\"pending\":\"not-moved\"}");
+
+        WatchlistStoreResult recovered = Store().Read();
+
+        // At least one recoverable valid copy: the live file. Not a first run, not a quarantine.
+        Assert.True(recovered.IsUsable);
+        Assert.Equal(SettingsOutcome.Loaded, recovered.Outcome);
+        Assert.Equal("Second", Assert.Single(recovered.Catalog.Watchlists).Name);
+        Assert.True(File.Exists(Path.Combine(_root, FileName)));
+
+        // The un-moved scratch stays ignored, and the folder saves normally again afterwards - the
+        // interrupted rotation did not poison the store's refusal state.
+        Assert.True(Store().Write(CatalogOf("Fourth")).IsUsable);
+        Assert.Contains("Fourth", File.ReadAllText(Path.Combine(_root, FileName), Encoding.UTF8), StringComparison.Ordinal);
+    }
+
+
+    [Fact]
     public void ReadingAFolderThatDoesNotExistWritesNothing()
     {
         // Opening the plugin must be side-effect free: no directory, no file, no backup, no scratch

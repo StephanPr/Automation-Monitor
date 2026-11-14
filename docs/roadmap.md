@@ -7,14 +7,17 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-12 - the AM-35 identity probe (WF-A.8) has its first live answer, handed back through the
-copyable result window AM-36 added on 2026-11-11: **`TextOnly`** for one probed flow - the production text filter
-returned rows whose `workflowid` equalled the identity discovery produces, the lookup filter returned none. The
-monitoring query does not change; that was the question the spike existed to settle. The lookup's zero is recorded
-as **unresolved filter behaviour, not an invalidated documented join**. Still owed by the maintainer: the direct
-flow-discovery report (rows displayed and the identity-source tally) and gate item 4 (scaling, keyboard). None of
-this validates the production run-history pipeline - the read that answered belongs to the diagnostic probe, and
-there is still no run grid.
+Last updated: 2026-11-14 - M4 resumes at C5 and C5 is done: the plugin now holds the storage root
+(`<Paths.SettingsPath>\AutomationMonitor`, the `AUTOMATION_MONITOR_XTB_ROOT` override, a refusal when
+neither is available), the real-`System.IO` `ISettingsFileAccess`, and the `WatchlistStorage` composition
+root. The disk layer is proven against a temporary storage root on two layers - 38 real-filesystem tests in
+the `net10` suite (518 total) and a 31-check `net48` harness under .NET Framework 4.8 (first
+`DataContractJson` round trip on 4.8, the `File.Move`-onto-existing-backup trap, read-only refusal,
+crash recovery, quarantine plus preserved refusal). No real settings directory was touched and no window
+can reach the store yet: C6 (the Watchlists view) is next. The 2026-11-12 state still stands: the WF-A.8
+probe answered `TextOnly` (the lookup zero recorded as unresolved filter behaviour, not an invalidated
+documented join), the direct flow-discovery report and gate item 4 (scaling, keyboard) are still owed by
+the maintainer, and there is still no run grid.
 
 ## 1. Where the project stands
 
@@ -23,7 +26,7 @@ there is still no run grid.
 | Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 480 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix, 450 after the AM-35 probe rules, 480 after the AM-36 diagnostic hand-back) |
 | M1 solution and cloud-flow discovery | Implemented in core and gateway; **cast and projection defects confirmed live and fixed; the identity defect is fixed and a flow reached the probe on 2026-11-12** | Mapping and identity decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox; the flow read answered with 59 rows live but every one of them lost its id (AM-34); on 2026-11-12 a flow was selectable and probeable, so a flow row and its identity did reach the UI - the displayed row count and the identity-source tally are still unreported |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; still no run grid. The only run-history UI is the AM-35 diagnostic probe, whose result AM-36 made readable and copyable in the plugin itself and which answered on 2026-11-12 | Core decisions unit tested (480 tests, smoke `PASS`); the production run read has **never** been executed against a tenant; the AM-35 *diagnostic* read of the same table has (2026-11-12, one flow: the text filter returned 5 rows) - that proves the projected column shapes and the filter choice, not normalization, aggregation or display, and the result window is proven only by the maintainer's run |
-| M4 saved watchlists and settings | Core implemented (`a23f216`); plugin storage root and Watchlists view **paused** | Core layer only, against an in-memory file seam |
+| M4 saved watchlists and settings | Core implemented (`a23f216`); **C5 disk storage implemented** (root resolution, real `System.IO` access, composition root); Watchlists view (C6) still **paused** | Core layer (518 xUnit tests, including 38 real-filesystem adapter tests) plus a 31-check net48 harness on a temporary storage root; the real settings directory untouched |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -258,17 +261,19 @@ WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a
    keyboard), the unexplained `no rows either way` population behind WF-A.10, and the WF-A.9 decision on the
    discovery diagnostic's reachability.
 3. WF-B.1 spike, then WF-B.2 to B.5.
-4. Resume M4: C5 plugin storage root and the disk ISettingsFileAccess, C6 the Watchlists view,
-   tab host and reconciliation preview, C7 the full gate with an unchanged package audit, C8 the
-   documentation inventory.
+4. M4 resumes from C6: C5 (the plugin storage root and the disk `ISettingsFileAccess`, plus the
+   composition root) is done on 2026-11-14 and proven on .NET Framework 4.8 against a temporary storage
+   root. Next: C6 the Watchlists view, tab host and reconciliation preview, C7 the full gate with an
+   unchanged package audit, C8 the documentation inventory.
 5. WF-D: a dual WPF evaluation, which needs a working discovery path to have real rows to show.
 6. WF-E design direction, then WF-C Azure discovery, which is independent of the UI decision but
    obeys the same spike-before-code rule.
 
-M4 is paused, not obsolete. It is committed at `a23f216`, green at the core layer, and its open
-checkpoints and contract changes carry forward unchanged: the settings kind discriminator,
-Clear moving content to a displaced file instead of deleting it, the store notes on
-WatchlistStoreResult, and a serializer that refuses a payload which is not exactly one object.
+M4 is paused at C6, not obsolete. The core is committed at `a23f216` and the disk storage layer (C5) on
+top of it, each green at its layer, and the open checkpoints and contract changes carry forward
+unchanged: the settings kind discriminator, Clear moving content to a displaced file instead of
+deleting it, the store notes on WatchlistStoreResult, and a serializer that refuses a payload which
+is not exactly one object.
 
 ## 7. Standing rules that bind every WF checkpoint
 

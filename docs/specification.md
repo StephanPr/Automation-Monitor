@@ -843,9 +843,11 @@ Store locally:
 
 Use a versioned JSON schema and/or XrmToolBox settings helpers. Scope settings by environment and tenant where appropriate, and support safe export/import. Never persist access tokens or client secrets inside these settings.
 
-Implemented shape (core layer, milestone M4): one file, `watchlists.json`, in the plugin's own folder
-under the host's settings directory, holding the watchlists, the per-environment active selection and the
-application defaults together so a save cannot leave the halves out of step.
+Implemented shape (milestone M4, core plus the plugin's disk layer): one file, `watchlists.json`, in the
+plugin's own `AutomationMonitor` folder under the host's settings directory - the directory the XrmToolBox
+host reports for its settings, with a single documented override and a refusal when neither is available -
+holding the watchlists, the per-environment active selection and the application defaults together so a save
+cannot leave the halves out of step.
 
 - Every record carries `schemaVersion` and a `kind` discriminator. A file written by a newer version, one
   whose schema is too old, one that cannot be parsed, one truncated mid-write, and one that does not

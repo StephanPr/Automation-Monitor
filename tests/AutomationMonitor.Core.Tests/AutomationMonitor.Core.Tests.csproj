@@ -24,4 +24,18 @@
     <ProjectReference Include="../../src/AutomationMonitor.Core/AutomationMonitor.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The disk half of the persistence seam ships inside the net48 plugin, and a net10 test project cannot
+      reference a net48 assembly. These two files use nothing but System.IO and Core types, so they are
+      compiled here as source too: the same bytes that are built into AutomationMonitor.Plugin.dll are then
+      exercised against a real file system, on both CI runners, instead of only being proven to compile.
+      Storage/WatchlistStorage.cs is deliberately NOT linked - it names the host's Paths, which is the one
+      thing a test must not need. Nothing is added to the distribution payload by this: the allow-list stays
+      Plugin.dll + Core.dll.
+    -->
+    <Compile Include="../../src/AutomationMonitor.Plugin/Storage/DiskSettingsFileAccess.cs" Link="Storage/DiskSettingsFileAccess.cs" />
+    <Compile Include="../../src/AutomationMonitor.Plugin/Storage/PluginStorageLocation.cs" Link="Storage/PluginStorageLocation.cs" />
+  </ItemGroup>
+
 </Project>

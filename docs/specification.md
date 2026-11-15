@@ -937,9 +937,11 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
   decided — the organization id from the authenticated `WhoAmIRequest` — but derivation itself stays as it is until
   that re-key has been confirmed by the operator. Adding a flow whose scope is known to a list whose scope is not
   must not associate the list silently: same-scope handling stays as it is, and moving a list from unverified to a
-  named scope happens only through the confirmed action above. That action is itself **deferred** while the plugin
-  cannot resolve a qualified scope when it loads, lists and matches saved watchlists - see AC-35 - because a stored
-  list naming an identity the monitoring path cannot match is a list the operator has lost.
+  named scope happens only through the confirmed action above. That action remains **deferred** - see AC-35 - and since
+  AM-44.3a the reason is no longer that the plugin cannot resolve a qualified scope when it loads, lists and matches
+  saved watchlists: it can, and the association still refuses. What it now waits for is that resolution being observed
+  running inside XrmToolBox and the operator's own confirmation, because a stored list naming an identity nobody agreed
+  to is a list the operator did not choose.
 
 
 ### Packaging
@@ -1071,9 +1073,11 @@ Only after explicit redesign and risk review: enable/disable workflows, cancel r
 - **AC-32:** Verifying a stored list against the connected organization is a bounded, read-only read (a fixed number of ids per request, a fixed number of requests, pages and rows) and its outcome is one named evidence class: verified, partially resolved, unresolved, nothing to verify, incomplete, unauthorized, unavailable, unsupported, or no connected organization. Only **verified** - every stored member id found by a read that ran to the end - may support attaching an identity.
 - **AC-33:** The action shows a preview before anything changes: which members would be re-keyed, that ids, names, inclusion, provenance, mode, preferences and coverage do not move, that other lists and other environments are untouched, and that a save first keeps `watchlists.json.bak`. A confirmation applies exactly the previewed plan; if the list or the evidence has moved since, the action is refused and the file is unchanged.
 - **AC-34:** Association attaches an identity only to members whose environment was never recorded. A member carrying any other recorded scope - another organization, a legacy bare id, an unknown kind or a damaged value - refuses the whole action rather than leaving half a list re-keyed, and a list that already names a different organization is never moved. Asking again for an identity the list already carries reports no change and dirties nothing.
-- **AC-35:** While the build cannot resolve a qualified scope when it loads and matches saved watchlists, applying an association is **deferred**: the refusal says why and names the checkpoint that lifts it, nothing changes in memory, and the file stays byte-identical. No other path may reach the same result sideways: adding a flow whose scope is a verified organization to a list whose environment was never verified, or importing such flows into it, is refused with the action the operator has to take instead.
+- **AC-35:** Applying an association stays **deferred** until the qualified-scope resolution has been observed running inside XrmToolBox and the operator has confirmed the change: the refusal says why and names the checkpoint that lifts it, nothing changes in memory, and the file stays byte-identical. No other path may reach the same result sideways: adding a flow whose scope is a verified organization to a list whose environment was never verified, or importing such flows into it, is refused with the action the operator has to take instead.
 - **AC-36:** Once derivation is flipped, a newly discovered flow's identity carries the verified organization scope, and the environment shown to the operator is a friendly label beside the fingerprint. A display name, URL name or friendly name never participates in a workflow key, a run key, a merge, a cache key or a query filter - presentation only, always.
 - **AC-37:** An unverified stored member is reported as *not matched by this read*, never as absent. A list that is merely unreadable, unauthorized or empty must never be presented as a list whose flows have gone.
+- **AC-38:** Every asynchronous action is bound to the connection and the organization it started against. A result that arrives after the connection changed or closed is discarded and reported as discarded - never applied to the environment that replaced it - and no second source of connected scope exists beside the organization a completed read named.
+- **AC-39:** A watchlist saved while the organization is resolved is created under that scope, and a stored list is matched to an environment by what its scope names rather than by the spelling in the file. A stored scope this build cannot interpret matches only exactly what it says, and a list with no recorded scope stays visible in every environment, including with no connection at all.
 
 ---
 

@@ -37,8 +37,8 @@ namespace AutomationMonitor.Plugin.UI
     /// <summary>
     /// One entry of the saved-watchlist combo (C6). The label is a display string; the id is the stored
     /// identity the host opens by. The id is kept off the label so a name can never be mistaken for an
-    /// identifier, and the combo is filled per environment so it only ever offers lists scoped to the
-    /// connected environment.
+    /// identifier, and the host supplies the label - including the environment state - from Core wording so
+    /// this class holds no rule of its own.
     /// </summary>
     public sealed class SavedWatchlistChoice
     {
@@ -83,21 +83,27 @@ namespace AutomationMonitor.Plugin.UI
 
         public string ModifiedOnUtc { get; }
 
-        public static FlowRow From(WorkflowReference flow)
+        /// <summary>
+        /// A row as the operator reads it. The workflow id is the provider's own, canonicalised by
+        /// <see cref="WorkflowKey"/>, and kept for the deep links later milestones need. The environment column is
+        /// the shared display wording: it names the organization the row's identity carries - as a fingerprint,
+        /// beside the connected organization's display name when this session verified that organization - or says
+        /// plainly that no environment was verified for this row. It never implies one: a stored member whose
+        /// scope was never verified reads as unverified however the current connection looks, because opening a
+        /// list is not evidence about where its flows came from.
+        /// </summary>
+        public static FlowRow From(WorkflowReference flow, ConnectedOrganization connected)
         {
             if (flow == null)
             {
                 throw new ArgumentNullException(nameof(flow));
             }
 
-            // WorkflowKey normalises the id, so this is the provider id kept for deep links. The environment
-            // column is the shared scope label: it says what kind of scope the row carries and never prints a
-            // whole identifier, which is how an organization id stays out of an on-screen status line.
             return new FlowRow(
                 flow.Name,
                 flow.StateLabel,
                 flow.WorkflowId,
-                ResourceScopeLabel.DescribeStored(flow.EnvironmentId),
+                EnvironmentDisplay.Describe(flow.Key.Scope, connected),
                 flow.ModifiedOnUtc.HasValue
                     ? flow.ModifiedOnUtc.Value.ToUniversalTime().ToString("u", CultureInfo.InvariantCulture)
                     : "not reported");

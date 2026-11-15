@@ -21,6 +21,11 @@ namespace AutomationMonitor.Core.Services
     /// <item><description>A member is removed only when every solution it came from was read completely
     /// and did not report it. A partial, unauthorized, unavailable or stale read keeps the member and
     /// labels it unresolved instead.</description></item>
+    /// <item><description>Identity vocabularies are not mixed. A read whose flows are keyed by a verified
+    /// organization cannot express the identity of a member recorded without one, nor of a member whose
+    /// identity names a different organization, so such a member is kept and reported as unresolved rather
+    /// than assumed gone, and a flow whose organization this list does not name is never added to it -
+    /// attaching an environment is the operator's association decision, not a refresh's.</description></item>
     /// <item><description>Only a dynamic list changes at all. Snapshot and manual lists get the same
     /// report with nothing applied, because their membership belongs to the operator.</description></item>
     /// </list>
@@ -73,6 +78,18 @@ namespace AutomationMonitor.Core.Services
 
             List<MembershipChange> changes = new List<MembershipChange>();
             List<WatchlistMember> kept = new List<WatchlistMember>();
+
+            // Two identity vocabularies meet here once discovery names an organization while a saved
+            // list's members do not. A read that keys its flows by a verified organization cannot
+            // express the identity of a member recorded without one, so that member's absence from the
+            // read says nothing about whether the flow still exists. Without this rule the first
+            // complete read after AM-44.3 would remove every member of a dynamic legacy list and add
+            // each flow back under a new key - the list would read as emptied and rebuilt by an
+            // association nobody confirmed.
+            ResourceScope discoveryScope = DiscoveryOrganization(sources);
+            ResourceScope listScope = ResourceScope.Read(watchlist.EnvironmentId);
+            bool listNamesOrganization = listScope.IsQualified;
+
             foreach (WatchlistMember member in watchlist.Members)
             {
                 Discovery? hit;
@@ -109,7 +126,7 @@ namespace AutomationMonitor.Core.Services
                     continue;
                 }
 
-                DecideAbsent(watchlist, member, sources, isDynamic, applyChanges, isManual, changes, kept);
+                DecideAbsent(watchlist, member, sources, isDynamic, applyChanges, isManual, discoveryScope, changes, kept);
             }
 
             foreach (KeyValuePair<string, Discovery> pair in found)
@@ -122,6 +139,29 @@ namespace AutomationMonitor.Core.Services
                     true,
                     seenAtUtc,
                     seenAtUtc);
+
+                // A flow whose identity names a verified organization may not join a list that records
+                // none: that would hand the list an environment it does not claim, which is the silent
+                // association AM-44.2 gated and AM-44.3a keeps gated. The discovery stays visible in the
+                // report as not applied, so a short list is never mistaken for the whole solution.
+                bool vocabularyMismatch = DescribeVocabularyMismatch(discoveryScope, member.Key.Scope) != null;
+                bool otherOrganization = listNamesOrganization
+                    && member.Key.Scope.IsQualified
+                    && !member.Key.Scope.IsSameResourceAs(listScope);
+                bool listClaimsNothing = !listNamesOrganization && member.Key.Scope.IsQualified;
+                if (vocabularyMismatch || listClaimsNothing || otherOrganization)
+                {
+                    changes.Add(new MembershipChange(
+                        MembershipChangeKind.NotApplied,
+                        member,
+                        "found in " + DescribeSolutions(newcomer.SolutionIds) + " but its identity is "
+                        + ResourceScopeLabel.Describe(member.Key.Scope) + " while this list records "
+                        + ResourceScopeLabel.DescribeStored(watchlist.EnvironmentId)
+                        + (otherOrganization
+                            ? " - a member belongs to one organization only, and moving one between organizations is the operator's decision, never a refresh's"
+                            : " - associate the list with an organization before a refresh can add it")));
+                    continue;
+                }
 
                 if (isDynamic && applyChanges)
                 {
@@ -146,7 +186,7 @@ namespace AutomationMonitor.Core.Services
             {
                 WatchlistBuilder builder = WatchlistBuilder.From(watchlist);
                 builder.SetMembers(kept);
-                builder.SetCoverage(combined, CoverageNotes(sources, changes));
+                builder.SetCoverage(combined, CoverageNotes(sources, changes, discoveryScope.IsQualified));
                 builder.StampMembershipRefresh(seenAtUtc);
                 after = builder.Build();
             }
@@ -211,6 +251,7 @@ namespace AutomationMonitor.Core.Services
             bool isDynamic,
             bool applyChanges,
             bool isManual,
+            ResourceScope discoveryScope,
             List<MembershipChange> changes,
             List<WatchlistMember> kept)
         {
@@ -221,6 +262,19 @@ namespace AutomationMonitor.Core.Services
                     MembershipChangeKind.KeptManual,
                     member,
                     "added by hand, so it is kept even though no source reported it"));
+                return;
+            }
+
+            // A read that keys its flows by a verified organization cannot express the identity of a
+            // member recorded without one, and neither can it express a member whose identity names a
+            // different organization. The reverse is equally true. Absence from a read that could not have
+            // reported this member either way is not evidence that the flow is gone, so the member is kept
+            // and called unresolved - never removed, never silently re-keyed.
+            string? vocabularyReason = DescribeVocabularyMismatch(discoveryScope, member.Key.Scope);
+            if (vocabularyReason != null)
+            {
+                kept.Add(member);
+                changes.Add(new MembershipChange(MembershipChangeKind.Unresolved, member, vocabularyReason));
                 return;
             }
 
@@ -285,7 +339,7 @@ namespace AutomationMonitor.Core.Services
         /// matters. An unresolved count is always stated, because that is the number an operator has to
         /// trust before acting on the list.
         /// </summary>
-        private static List<string> CoverageNotes(List<MembershipEvidence> sources, List<MembershipChange> changes)
+        private static List<string> CoverageNotes(List<MembershipEvidence> sources, List<MembershipChange> changes, bool discoveryNamesOrganization)
         {
             List<string> notes = new List<string>();
             foreach (MembershipEvidence source in sources)
@@ -298,11 +352,16 @@ namespace AutomationMonitor.Core.Services
 
             int unresolved = 0;
             int manual = 0;
+            int identityVocabulary = 0;
             foreach (MembershipChange change in changes)
             {
                 if (change.Kind == MembershipChangeKind.Unresolved)
                 {
                     unresolved++;
+                    if (change.Member.Key.Scope.IsQualified != discoveryNamesOrganization)
+                    {
+                        identityVocabulary++;
+                    }
                 }
                 else if (change.Kind == MembershipChangeKind.KeptManual)
                 {
@@ -316,6 +375,18 @@ namespace AutomationMonitor.Core.Services
                     + " member(s) could not be checked this pass and were kept as they were");
             }
 
+            // The reason an entire list can be unresolved at once without any of its flows being gone:
+            // the read and the record are naming identity differently. Said plainly, because "59 could
+            // not be checked" with no explanation reads as an environment problem rather than the
+            // association decision this is.
+            if (identityVocabulary > 0)
+            {
+                notes.Add(identityVocabulary.ToString(CultureInfo.InvariantCulture)
+                    + " member(s) were compared against a discovery that records "
+                    + (discoveryNamesOrganization ? "a verified organization" : "no organization")
+                    + " while they record the opposite, so nothing this pass could say about them was evidence");
+            }
+
             if (manual > 0)
             {
                 notes.Add(manual.ToString(CultureInfo.InvariantCulture) + " member(s) were added by hand and cannot be removed by a refresh");
@@ -327,6 +398,64 @@ namespace AutomationMonitor.Core.Services
             }
 
             return notes;
+        }
+
+        /// <summary>
+        /// The organization the usable sources read, if any. That one fact decides whether a member recorded
+        /// without a scope - or with another organization's scope - could have been reported at all, so it is
+        /// measured from the evidence rather than passed in by a caller that might know the connection and
+        /// might not. Unverified when no usable source named an organization.
+        /// </summary>
+        private static ResourceScope DiscoveryOrganization(List<MembershipEvidence> sources)
+        {
+            foreach (MembershipEvidence source in sources)
+            {
+                if (!source.IsUsable)
+                {
+                    continue;
+                }
+
+                foreach (WorkflowReference flow in source.Flows)
+                {
+                    if (flow != null && flow.Key.Scope.IsQualified)
+                    {
+                        return flow.Key.Scope;
+                    }
+                }
+            }
+
+            return ResourceScope.Unverified;
+        }
+
+        /// <summary>
+        /// Why this read could not have reported a member whose identity is stated, or null when it could.
+        /// The two vocabularies - a flow named by a verified organization and a flow recorded without one -
+        /// cannot be compared by identity, and neither can two different organizations: a read of one never
+        /// answers for the other, however complete it was.
+        /// </summary>
+        private static string? DescribeVocabularyMismatch(ResourceScope discoveryScope, ResourceScope memberScope)
+        {
+            bool readNamesOrganization = discoveryScope.IsQualified;
+            bool memberNamesOrganization = memberScope.IsQualified;
+
+            if (readNamesOrganization != memberNamesOrganization)
+            {
+                return readNamesOrganization
+                    ? "this discovery keys its flows by a verified organization and this member records "
+                        + ResourceScopeLabel.Describe(memberScope)
+                        + ", so the read could not have reported it either way - kept, not assumed gone"
+                    : "this discovery names no organization while this member's identity does, so the read"
+                        + " could not have reported it either way - kept, not assumed gone";
+            }
+
+            if (memberNamesOrganization && !memberScope.IsSameResourceAs(discoveryScope))
+            {
+                return "this discovery read " + ResourceScopeLabel.Describe(discoveryScope)
+                    + " while this member's identity names " + ResourceScopeLabel.Describe(memberScope)
+                    + ", so the read could not have reported it either way - kept, not assumed gone";
+            }
+
+            return null;
         }
 
         private static string NotAppliedReason(Watchlist watchlist, bool applyChanges)

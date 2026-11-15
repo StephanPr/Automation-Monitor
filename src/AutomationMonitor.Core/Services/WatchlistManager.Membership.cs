@@ -323,7 +323,7 @@ namespace AutomationMonitor.Core.Services
                 return WatchlistOperationResult.Unchanged(
                     _catalog,
                     current,
-                    isIncluded ? "that flow is already monitored" : "that flow is already excluded");
+                    isIncluded ? "that flow is already selected" : "that flow is already excluded");
             }
 
             WatchlistBuilder builder = WatchlistBuilder.From(current);

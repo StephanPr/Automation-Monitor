@@ -12,7 +12,7 @@ against a live environment. Every claim below names its evidence. Product behavi
 | `workflow.category` for a modern cloud flow | `5` | Microsoft Learn workflow entity reference + spec | Still documented-only: no workflow row has ever been returned, so the selector value is unconfirmed. `CloudFlowSelectionResult.DescribeDiagnostics()` now logs the category values a real environment does send, which is what will settle it |
 | SDK enum for either value | none | Reflection over `Microsoft.Xrm.Sdk` 9.0.2.2 and `XrmToolBox.Extensibility` 1.2025.10.74 | They are named constants in `DataverseSchema`, not enums |
 | `workflow.statecode` | `0` disabled, `1` enabled | Platform option-set metadata | Normalized to `WorkflowState`; raw code always retained |
-| Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64; **measured live 2026-11-15** on an Office 365 online connection in XrmToolBox `1.2026.9.78` | Used as the scope half of `WorkflowKey`; null scope stays a distinct key. **Measured: empty on that connection.** The plugin's own `watchlists.json` proved it - the saved watchlist, all 59 of its members and the environment profile stored an empty scope - so flows were keyed unscoped and the Environment column read the unverified label (`no verified environment` since AM-44.1), correctly. AM-40 was the defect that made this legitimate state invisible rather than merely unscoped |
+| Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64; **measured live 2026-11-15** on an Office 365 online connection in XrmToolBox `1.2026.9.78` | Used as the scope half of `WorkflowKey`; null scope stays a distinct key. **Measured: empty on that connection.** The plugin's own `watchlists.json` proved it - the saved watchlist, all 59 of its members and the environment profile stored an empty scope - so flows were keyed unscoped and the Environment column read the unverified label (`no verified environment` since AM-44.1), correctly. AM-40 was the defect that made this legitimate state invisible rather than merely unscoped. **Superseded for the scope source by AM-44.3a (2026-11-15): this property is no longer what keys a `WorkflowKey`.** The scope now comes from `WhoAmIResponse.OrganizationId` through the read-only identity seam, because this property is empty here while a completed read names an organization - keying off the property would keep storing an empty scope while looking verified |
 | Paging signal | `EntityCollection.MoreRecords` + `PagingCookie` | Reflection over `Microsoft.Xrm.Sdk` | Followed by `PageReader`; a stopped read is `Partial` |
 | Reading an attribute that is **not** an `AliasedValue` as one | `GetAttributeValue<AliasedValue>` **throws** `InvalidCastException`; `entity.Attributes[x] as AliasedValue` returns null instead | net48 harness loading the `Microsoft.Xrm.Sdk.dll` this XrmToolBox install ships (assembly 9.0.0.0, file 9.2.49.14828), 2026-11-09 | **Verified against the assembly the host loads**; still not a tenant observation |
 | Absent attribute, and attribute present with a null value | both read as null; neither throws | Same harness | Verified client-side |
@@ -20,7 +20,8 @@ against a live environment. Every claim below names its evidence. Product behavi
 | A projected column the table does not have | Dataverse refuses the **whole** `RetrieveMultiple`; not one row comes back | First live session, 2026-11-09: the flow query asked for `primarycategory` and the platform answered `The 'workflow' entity doesn't contain attribute with Name = 'primarycategory' and NameMapping = 'Logical'` | **Observed live** (maintainer-reported). That column is no longer projected, and `DataverseSchemaTests` keeps it out of the list |
 | The solution read against a real tenant | `complete - 975 row(s) over 4 page(s)` | First live session, 2026-11-09, after the AM-32 type-read repair | **Observed live**: the AM-32 cast defect did not return |
 | `WorkflowActivity` (the table M7 needs for classic workflows) | absent in every environment tried | First live session, 2026-11-09 | **Observed live**: M7 stays blocked on an alternative source, not on our query |
-| The previous released build (commit `be8ea8b`, the last commit before AM-44.1) reads and re-saves a version-1 file whose members carry `dataverse-organization:<guid>`, an unknown-kind scope and a damaged qualified scope | 6 of 6 members read, 6 written back, every scope value byte-for-byte the same, `schemaVersion` still 1, `kind` still `watchlist-store`, inclusion flags and member provenance unchanged, no refusal raised | `dotnet run -c Release --project %TEMP%\am441-compat\Am441Compat.csproj` on Windows 11, 2026-11-15 — a harness outside the repository that generates the fixtures with this build's `WatchlistManager` and opens them with the worktree build's own `SettingsFileStore` + `JsonWatchlistStore` + `DataContractJsonSettingsSerializer` | **Verified on Windows 11**: `COMPATIBILITY: PASS` over three fixtures (qualified scopes, the real 59-member unscoped shape, mixed GUID spellings). AC-30's condition is met, so `schemaVersion` stays 1. Re-run before the first production write of a qualified scope (AM-44.2) |
+| The previous released build (commit `be8ea8b`, the last commit before AM-44.1) reads and re-saves a version-1 file whose members carry `dataverse-organization:<guid>`, an unknown-kind scope and a damaged qualified scope | 6 of 6 members read, 6 written back, every scope value byte-for-byte the same, `schemaVersion` still 1, `kind` still `watchlist-store`, inclusion flags and member provenance unchanged, no refusal raised | `dotnet run -c Release --project %TEMP%\am441-compat\Am441Compat.csproj` on Windows 11, 2026-11-15 — a harness outside the repository that generates the fixtures with this build's `WatchlistManager` and opens them with the worktree build's own `SettingsFileStore` + `JsonWatchlistStore` + `DataContractJsonSettingsSerializer` | **Verified on Windows 11**: `COMPATIBILITY: PASS` over three fixtures (qualified scopes, the real 59-member unscoped shape, mixed GUID spellings). AC-30's condition is met, so `schemaVersion` stays 1. Re-run before the first production write of a qualified scope (AM-44.2). **Re-run on 2026-11-15 for AM-44.3a against the build that actually shipped it (see the next row) and passed** |
+| The same round trip against commit `b318416` - the AM-44.2a build deployed on the primary host, and therefore the build a user still has installed when AM-44.3a writes its first qualified scope - using the shape AM-44.3a writes: a list whose `environmentId` is the canonical qualified scope, members whose `scopeId` names that organization, one unknown-kind scope, one damaged scope, one empty scope, the 59-member unscoped file, and three spellings of one organization | 6 of 6 and 59 of 59 members read and re-saved; every scope value verbatim; `schemaVersion` still 1; `kind` still `watchlist-store`; inclusion, provenance, active selection and environment profile intact; no empty scope filled in. On the mixed-spelling fixture the previous build **normalised** the braced upper-case GUID to the canonical spelling (two canonical, none braced, no member lost) - a change of spelling that keeps the same organization, not a loss of scope | `dotnet run -c Release --project %TEMP%\am443-compat\Am443Compat.csproj` on Windows 11, 2026-11-15 - the same harness re-pointed at a scratch `git worktree` at `b318416` | **Verified on Windows 11**: `COMPATIBILITY: PASS`, exit 0, before AM-44.3a's first qualified write. AM-44.3b must re-run it against whatever commit is then previous before re-keying a stored list |
 
 ### Query shape actually issued (read-only)
 
@@ -124,7 +125,11 @@ names column behaviour and coverage - not tenant content.
    scope). Unscoped keying is therefore the ordinary state on at least this connection type, not an edge
    case: the saved-watchlist line now says the lists are not environment-scoped, and
    `WatchlistCatalog.ForEnvironment` shows unscoped lists everywhere so a list built in that state cannot
-   vanish. **This is not proof that no environment id is reachable.** The empty value was read from the
+   vanish. **Amended 2026-11-15 (AM-44.3a):** unscoped keying stopped being the ordinary state here - the scope
+   now comes from the organization a completed `WhoAmI` read named, so discovery and a new save carry
+   `dataverse-organization:<canonical-guid>`; rows stay unscoped, and the status line says so, only when that read
+   names no organization, and a list already saved unscoped keeps no scope until the operator confirms an association.
+   **This is not proof that no environment id is reachable.** The empty value was read from the
    plugin's own *saved* `ConnectionDetail`, and the connection library assigns `EnvironmentId` from the
    connector client it built rather than storing a value the environment reported, so a missing element in the
    saved record says nothing about `CrmServiceClient.EnvironmentId` on the live client. On-premises and ADX
@@ -212,6 +217,10 @@ owns.
 It concludes a narrow fact: the saved connection record for this connection type carries no environment id,
 and unscoped keying is the ordinary state there. It does **not** conclude that no identity is reachable — the
 live client was never queried, and reading a saved record cannot answer a question about a running client.
+(The state it describes held until AM-44.3a: the plugin now keys discovery and new saves from the organization
+a completed `WhoAmI` read returns rather than from this property, so the running client is asked. That change
+is recorded in the AM-44.3a section below and retroactively narrows nothing here - the observation about the
+saved record stands.)
 
 Substituting any identity into scope derivation is not a display change. `WorkflowKey.ScopeId` participates in
 every stored member key and in `RunKey`, so a fresh identity that disagrees with the 59 stored empty-scope
@@ -354,8 +363,14 @@ provenances, its active selection, its environment profile and its preferences, 
 mixed-spelling fixture kept its one canonical value. Nothing bumped `schemaVersion`, refused the file, or moved a
 member. The stop condition did not trigger, so version 1 stands and no compatibility barrier is needed. AM-44.2 shipped
 without writing any qualified scope from the running plugin - applying an association is deferred (see below) - so no
-re-run was owed for it; **AM-44.3 must re-run the harness against whatever commit is then the previous release before
-its derivation flip lets the shipped path write its first qualified scope**, because the build to compare against moves.
+re-run was owed for it. **AM-44.3a did owe one, and ran it on 2026-11-15**: its shipped path writes qualified scope text
+the first time it saves a list discovered against a connected organization, so the harness was re-pointed at
+`b318416`, the build the maintainer actually has installed, and answered `COMPATIBILITY: PASS` (row in the table above).
+The one expectation restated in that harness is not a loosened guard: the mixed-spelling fixture's braced upper-case
+GUID comes back from the previous build's save in canonical form, which is the canonicalisation AM-44.1 chose for
+values this build can interpret - the member, its identity and every other scope value survive, and AM-44.3a never
+writes that spelling. **AM-44.3b re-runs the same harness against whatever commit is then the previous release before
+it re-keys a stored list**, because the build to compare against moves each time.
 
 ### Display identity is separate from key identity
 
@@ -439,15 +454,23 @@ byte-identical. **What a hit does not prove is stated in the report itself:** th
 not the same as this list having come from there - importing a solution preserves workflow ids - so the operator
 confirms and the tool never infers.
 
-**Applying the association is deferred in this build, by design.** `ScopeResolutionSupport.Shipped` answers "can this
-build resolve a qualified connected scope when it loads, lists and matches saved watchlists?" with no, so a confirmed
-association is previewed and then refused with that reason and `AM-44.3` named. The reason is measured, not imagined:
-`AutomationMonitorControl.EnvironmentScope` derives the connected scope from `ConnectionDetail.EnvironmentId` (empty on
-this connection) and discovery produces unscoped flow identities, so re-keying a member today would break
-`Watchlist.FindMember`, the builder's `Key.Canonical` index, reconciliation, include/exclude/remove by key and the
-add-a-flow scope check - the list would still be on disk and would stop working. Sideways association is closed too:
-adding a flow whose scope is a qualified organization, or importing such flows, into a list whose environment was never
-verified is refused (`AssociationRequired`); adopting a *legacy unqualified* scope still behaves as before.
+**Applying the association is still deferred, for a different reason than it was.** When AM-44.2 shipped,
+`ScopeResolutionSupport.Shipped` answered "can this build resolve a qualified connected scope when it loads, lists and
+matches saved watchlists?" with no, and that answer was measured rather than assumed: `AutomationMonitorControl.EnvironmentScope`
+derived the connected scope from `ConnectionDetail.EnvironmentId` (empty on this connection) and discovery produced
+unscoped flow identities, so re-keying a member then would have broken `Watchlist.FindMember`, the builder's
+`Key.Canonical` index, reconciliation, include/exclude/remove by key and the add-a-flow scope check - the list would
+still be on disk and would have stopped working. **AM-44.3a removed that obstacle and no other.** The connected scope
+now comes from the organization a completed `WhoAmI` read named, discovery keys every row with it, a newly saved list is
+created under the scope the save resolved, and a stored qualified scope is resolved against the connected one wherever a
+list is listed, opened, matched or reconciled. The association action is still refused, and refused by name: re-keying a
+list the operator saved earlier waits until that resolution has been observed running inside XrmToolBox
+(`docs/roadmap.md`, section 3, item 10), and will then happen only on their confirmation. Sideways association is closed
+too, and is now tested in both directions: adding a flow whose scope is a qualified organization, or importing such
+flows, into a list whose environment was never verified is refused (`AssociationRequired`), and a flow that names one
+organization is never added to a list that names another - such a member stays visible and unresolved rather than being
+removed. Adopting a *legacy unqualified* scope still behaves as before. What a new save does write is the scope that
+save resolved; what an existing list keeps is exactly what it had, including nothing.
 
 **Not verified by AM-44.2.** The read has run exactly once against a tenant, on the maintainer's connection, and that run
 found the argument-shape defect recorded above; the corrected build has not been observed yet. No agent session connects,
@@ -457,6 +480,55 @@ remain first-hand-untested until the maintainer presses the read-only action aga
 behaviour by the unit suite on both hosts' automation; the SDK query shape by tests that execute the real
 `Microsoft.Xrm.Sdk` types; the plugin compile by `net48` Release. What is not: loading the button, and the answer this
 environment gives back.
+
+### Resolving and using the connected organization (AM-44.3a, built 2026-11-15)
+
+The scope contract above is only honest once the running plugin can name the organization it is inside. AM-44.3a adds
+that, and nothing else:
+
+- **One identity source.** Core's `ConnectedOrganizationResolver` asks an `IOrganizationIdentitySource` once per
+  connection and caches the answer; the plugin implements the seam as `DataverseOrganizationIdentitySource` over the
+  single `WhoAmIRequest` AM-42 proved reachable. `ConnectionDetail.EnvironmentId` is not consulted - it is measured
+  empty on this connection, and keying off it would store no scope while looking like a verified one.
+- **Three states, because "not asked yet" and "asked and refused" license different sentences.**
+  `ConnectedOrganizationState.NotAttempted / Resolved / Failed`. A failed read comes back unverified *and* carries the
+  provider result state and failure kind, so `DescribeEnvironment` can say this connection did not name an organization
+  instead of showing a blank scope as though it were the answer.
+- **One connection and one scope per action.** `ConnectedDataverseEnvironment` turns the service and connection detail
+  the host hands the control into a `DataverseOperation`: the bound service, the resolved organization, and a
+  `ConnectionTicket` from `ConnectionContext`. `AutomationMonitorControl` captures one operation per asynchronous action
+  and every callback passes `IsStale(ticket)` before it touches the screen, the catalogue or the file, so a read that
+  finishes after a switch or a disconnect is discarded with a sentence saying so. The gateway is built from the
+  operation with the operation's scope, so no provider call can carry a scope its action did not verify.
+- **Qualified identity where it is used.** Discovery keys each row `dataverse-organization:<canonical-guid>` when the
+  read named an organization, and stays unscoped - visibly, in the status line - when it did not. A save creates its
+  list under the scope that save resolved, not under whatever connection is open when the bytes are written. Run
+  history still filters the text `workflowid` column with the provider's own id, which is what AM-35 measured; the
+  scope qualifies the plugin-side key, never the value sent to Dataverse.
+- **Matching on what a scope names.** `WatchlistCatalog.ForEnvironment` / `ActiveWatchlistFor` and
+  `MembershipReconciler` compare `ResourceScope` values, so a stored qualified scope matches the connected one whatever
+  the file's spelling, while textual equality is kept as an extra arm for a stored value this build cannot canonicalise
+  (a bare legacy environment id, an unknown kind, a damaged identifier), which must keep matching exactly what it says.
+  Member identity needs no such arm: `WorkflowKey` already stores `ResourceScope.NormalizeStored` output, so a member's
+  scope is canonical before it takes part in equality, a hash or the builder's index. A member whose identity names a
+  *different* organization - or none - is kept and reported unresolved, never removed as "no longer in the environment";
+  `MembershipReconciler.DescribeVocabularyMismatch` states which vocabulary the read and the store are written in.
+- **Display stays display.** `EnvironmentDisplay` renders a scope for the Environment column, the saved-list labels and
+  the status line: the identity always, plus the host-supplied friendly name only for the organization this session
+  actually read. That name is sanitized (trimmed, control characters replaced, clamped to 80 characters) and never
+  enters a key, a filter, a merge, a cache key or a path. An unverified scope renders as `Unverified environment` and
+  never borrows the connected name.
+
+What AM-44.3a does not do: re-key a list that is already stored, adopt a qualified scope from an "add a flow" click, or
+offer the association action. `ScopeResolutionSupport` still ships `Shipped`, and its deferral reason now names the
+unobserved runtime gate (`docs/roadmap.md`, section 3, item 10) rather than an inability this build has already fixed.
+
+**Not verified by AM-44.3a.** No agent session connected to an environment, so none of this has been observed against a
+tenant: whether `WhoAmIResponse.OrganizationId` arrives as a `Guid` through the host's own assembly (AM-42's shape
+observation says it does; this build has not read one), whether a qualified row still resolves its run history on the
+real platform, whether a discarded in-flight result behaves as described when a connection changes mid-read, and how
+the new environment wording sits on screen at 100 / 150 / 200 percent scaling with keyboard navigation. That is item
+10's checklist, and it is the maintainer's run.
 
 ### Decided here, and deliberately not
 

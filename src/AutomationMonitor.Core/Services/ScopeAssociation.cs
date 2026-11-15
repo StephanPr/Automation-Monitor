@@ -8,26 +8,27 @@ using AutomationMonitor.Core.Providers.Dataverse;
 namespace AutomationMonitor.Core.Services
 {
     /// <summary>
-    /// Whether this build can resolve a qualified connected scope when it loads, filters and matches saved
-    /// watchlists. It is a value rather than an <c>if</c> inside the association path because the question is
-    /// a property of the whole build, not of one method: re-keying a saved list to
-    /// <c>dataverse-organization:&lt;guid&gt;</c> only leaves the list usable if the code that opens it, lists
-    /// it, reconciles its members and matches discovered flows against it understands that same scope.
+    /// Whether this build may reassign a stored watchlist's scope. It is a value rather than an <c>if</c>
+    /// inside the association path because the question is a property of the whole build, not of one
+    /// method: re-keying a saved list to <c>dataverse-organization:&lt;guid&gt;</c> only leaves the list
+    /// usable if the code that opens it, lists it, reconciles its members and matches discovered flows
+    /// against it understands that same scope.
     ///
     /// <para>
-    /// <b>The shipped answer is <see cref="NotYetResolvable"/>.</b> Today the plugin derives its connected
-    /// scope from <c>ConnectionDetail.EnvironmentId</c>, and discovery produces unscoped flow identities, so a
-    /// re-keyed member would stop matching every discovered row: reconciliation would report the whole list as
-    /// gone, a re-import would duplicate it, and include/exclude/remove by key would stop finding it. Attaching
-    /// an identity the monitoring path cannot resolve is a data-availability defect dressed as a feature, so
-    /// applying an association is deferred.
+    /// <b>The shipped answer is still <see cref="NotYetResolvable"/>.</b> What changed in AM-44.3a is the
+    /// half that used to be missing: discovery now derives the qualified organization scope from a
+    /// completed identity read, every saved-watchlist consumer keys off that same resolved scope, an
+    /// unverified stored member stays visible but is never matched to a verified one, and reconciliation
+    /// reports a vocabulary mismatch as unresolved rather than as gone. What has not changed is that a
+    /// stored identity may only move when the operator confirms it - and that confirmation is AM-44.3b,
+    /// which may not be built until this resolution has been observed working inside XrmToolBox
+    /// (docs/roadmap.md, section 3). Flipping this value before that gate is what this class exists to
+    /// make impossible.
     /// </para>
     ///
     /// <para>
-    /// Flip it in <c>Resolvable()</c>'s favour only in the change that (a) makes discovery derive the qualified
-    /// organization scope, (b) matches stored members against the connected scope, and (c) shows a friendly
-    /// environment label as presentation. Roadmap checkpoint AM-44.3 owns that, and its acceptance criteria are
-    /// the tests that must exist before this value changes.
+    /// <see cref="Resolvable"/> stays available for the association mechanics' own tests, so a closed
+    /// product gate never hides an untested code path; no shipped call site passes it.
     /// </para>
     /// </summary>
     public sealed class ScopeResolutionSupport
@@ -60,10 +61,10 @@ namespace AutomationMonitor.Core.Services
             {
                 return new ScopeResolutionSupport(
                     false,
-                    "This version cannot apply an environment association yet. A saved list whose members name a Dataverse organization"
-                        + " stays usable only once this plugin resolves that scope when it loads, lists and matches saved watchlists, and"
-                        + " gives newly discovered flows the same scope (" + RequiredCheckpoint + "). Until then the members would be re-keyed"
-                        + " into an identity the monitoring path cannot match, so the list would read as empty rather than as associated."
+                    "This version does not apply an environment association yet. It can now resolve the connected Dataverse organization"
+                        + " when it loads, lists and matches saved watchlists, and newly discovered flows carry that scope - but re-keying a"
+                        + " list you saved earlier stays switched off until that resolution has been verified running inside XrmToolBox, and"
+                        + " it would then happen only on your confirmation (" + RequiredCheckpoint + ")."
                         + " Nothing was changed and the saved file was not written.");
             }
         }
@@ -237,7 +238,7 @@ namespace AutomationMonitor.Core.Services
             text.Append("  Watchlist           : ").Append(ListName).Append(Environment.NewLine);
             text.Append("  Members             : ")
                 .Append(Num(MemberCount)).Append(" (")
-                .Append(Num(IncludedCount)).Append(" monitored, ")
+                .Append(Num(IncludedCount)).Append(" selected, ")
                 .Append(Num(MemberCount - IncludedCount)).Append(" excluded)").Append(Environment.NewLine);
             text.Append("  Current environment : ").Append(ResourceScopeLabel.Describe(FromScope)).Append(Environment.NewLine);
             text.Append("  Proposed environment: ").Append(

@@ -140,16 +140,31 @@ namespace AutomationMonitor.Core.Models
         /// The watchlists usable in one environment. A watchlist with no environment recorded is
         /// deliberately visible everywhere - lists built while disconnected must not vanish - while a
         /// list that names an environment must never appear in another one.
+        ///
+        /// <para>
+        /// A list that names a resource is matched on what it names, not only on how the file spells it:
+        /// AM-44.1 canonicalises a recognized scope, so a stored organization id in braces and upper case is
+        /// the same organization as the connected one. Textual equality stays as its own arm, because a
+        /// stored value this build cannot canonicalise - a bare legacy environment id, an unknown kind, a
+        /// damaged identifier - must keep matching exactly what it says and nothing else. A preserved scope is
+        /// never evidence of a match for a different spelling, and it never disappears while no environment is
+        /// verified.
+        /// </para>
         /// </summary>
         public IReadOnlyList<Watchlist> ForEnvironment(string? environmentId)
         {
-            string scope = (environmentId ?? string.Empty).Trim();
+            ResourceScope wanted = ResourceScope.Read(environmentId);
+            string wantedText = (environmentId ?? string.Empty).Trim();
             List<Watchlist> visible = new List<Watchlist>();
             foreach (Watchlist watchlist in Watchlists)
             {
-                if (watchlist.EnvironmentId.Length == 0
-                    || scope.Length == 0
-                    || string.Equals(watchlist.EnvironmentId, scope, StringComparison.OrdinalIgnoreCase))
+                ResourceScope stored = ResourceScope.Read(watchlist.EnvironmentId);
+                string storedText = watchlist.EnvironmentId;
+                if (stored.IsUnverified
+                    || wanted.IsUnverified
+                    || (storedText.Length > 0
+                        && string.Equals(storedText, wantedText, StringComparison.OrdinalIgnoreCase))
+                    || stored.IsSameResourceAs(wanted))
                 {
                     visible.Add(watchlist);
                 }

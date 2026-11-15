@@ -51,6 +51,21 @@ namespace AutomationMonitor.Plugin
         private readonly DiscoveryView view;
         private readonly IClock clock = new SystemClock();
 
+        /// <summary>
+        /// The connection this plugin is on and the organization that connection has been verified against.
+        /// Every asynchronous action captures from it on the UI thread and checks its ticket before applying a
+        /// result, so a switch or a disconnect in flight discards what was read instead of saving, matching or
+        /// labelling it under an environment the operator did not ask about.
+        /// </summary>
+        private readonly ConnectedDataverseEnvironment environments = new ConnectedDataverseEnvironment();
+
+        /// <summary>
+        /// The connected organization as the last completed action established it. Held so a row can be labelled
+        /// with what was verified rather than with whatever the connection is now - and only ever replaced by a
+        /// callback whose ticket was still current.
+        /// </summary>
+        private ConnectedOrganization connectedOrganization = ConnectedOrganization.NotAttempted;
+
         /// <summary>Own cancellation so a close or a cancel stops the read between pages.</summary>
         private CancellationTokenSource? cancellation;
 
@@ -101,6 +116,7 @@ namespace AutomationMonitor.Plugin
             if (disposing)
             {
                 CancelRunningWork();
+                environments.Invalidate();
                 if (cancellation != null)
                 {
                     cancellation.Dispose();
@@ -111,9 +127,84 @@ namespace AutomationMonitor.Plugin
             base.Dispose(disposing);
         }
 
+        /// <summary>
+        /// The host says the connection underneath this control changed or closed. Anything still running was
+        /// read from the environment the operator was looking at a moment ago, so it is cancelled, its scope is
+        /// forgotten and every result that came from it is dropped. A later callback for the same action still
+        /// finds its ticket stale and discards rather than applying - this only makes that happen sooner and
+        /// keeps the screen from showing one environment's rows while another is connected.
+        /// </summary>
+        protected override void OnConnectionUpdated(ConnectionUpdatedEventArgs e)
+        {
+            environments.Invalidate();
+            CancelRunningWork();
+
+            if (!IsDisposed)
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(ClearConnectionState));
+                }
+                else
+                {
+                    ClearConnectionState();
+                }
+            }
+
+            base.OnConnectionUpdated(e);
+        }
+
+        /// <summary>
+        /// Forget what the previous connection produced. Nothing here writes: the saved watchlists belong to
+        /// whichever environment they were stored under, so the drop-down simply goes back to "not read yet" and
+        /// is filled for the new connection when the operator opens it.
+        /// </summary>
+        private void ClearConnectionState()
+        {
+            connectedOrganization = ConnectedOrganization.NotAttempted;
+            allSolutions = new List<SolutionReference>();
+            discoveredFlows = new List<WorkflowReference>();
+            lastSelection = null;
+            watchlist = null;
+            watchlistIsSaved = false;
+            lastReadScope = null;
+
+            view.BindSolutions(new List<SolutionChoice>(), null);
+            view.BindFlows(new List<FlowRow>());
+            view.BindSavedWatchlists(new List<SavedWatchlistChoice>(), null);
+            view.ShowEmptyWatchlist();
+            RefreshWatchlistState();
+            view.Say(
+                "This plugin is on a different connection now. What the previous connection produced was discarded and nothing"
+                + " was saved; the saved watchlists are read again when you open the Saved list.");
+        }
+
+        /// <summary>
+        /// The discard gate every callback runs through first. False means the work belongs to a connection that
+        /// is gone: the result is dropped with the shared wording, and neither the screen, the saved file nor the
+        /// environment label is touched with it.
+        /// </summary>
+        private bool IsStale(ConnectionTicket? ticket, string action)
+        {
+            if (environments.IsCurrent(ticket))
+            {
+                return false;
+            }
+
+            view.Say(ConnectionContext.DescribeDiscard(action));
+            LogWarning("Automation Monitor discarded a " + action + " result that arrived after the connection changed.");
+            return true;
+        }
+
         private void LoadSolutions()
         {
-            DataverseSolutionFlowSource source = NewFlowSource();
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            if (!operation.Ticket.IsBound)
+            {
+                view.Say("Connect to a Dataverse environment before using this tool.");
+                return;
+            }
+
             CancellationToken token = BeginWork();
 
             view.SetBusy(true);
@@ -123,7 +214,15 @@ namespace AutomationMonitor.Plugin
             {
                 Message = "Reading solutions...",
                 IsCancelable = true,
-                Work = (worker, args) => { args.Result = source.GetSolutions(token); },
+                Work = (worker, args) =>
+                {
+                    // The organization is resolved on this worker, against the service captured above, before
+                    // anything is read: the scope is part of what every later row is keyed by, and one read
+                    // serves the whole connection rather than one per record.
+                    ConnectedOrganization organization = operation.Resolve(token);
+                    DataverseSolutionFlowSource source = NewFlowSource(operation, organization);
+                    args.Result = WorkResult.Of(operation, organization, source.GetSolutions(token));
+                },
                 PostWorkCallBack = args =>
                 {
                     EndWork();
@@ -136,14 +235,26 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    ProviderResult<IReadOnlyList<SolutionReference>>? result =
-                        args.Result as ProviderResult<IReadOnlyList<SolutionReference>>;
+                    WorkResult? reading = args.Result as WorkResult;
+                    if (reading == null)
+                    {
+                        view.Say("The solution read returned no result at all.");
+                        return;
+                    }
+
+                    if (IsStale(reading.Operation.Ticket, "solution"))
+                    {
+                        return;
+                    }
+
+                    ProviderResult<IReadOnlyList<SolutionReference>>? result = reading.ValueAs<ProviderResult<IReadOnlyList<SolutionReference>>>();
                     if (result == null)
                     {
                         view.Say("The solution read returned no result at all.");
                         return;
                     }
 
+                    connectedOrganization = reading.Organization;
                     allSolutions = result.Value ?? new List<SolutionReference>();
                     BindSolutionChoices();
                     view.Say(SourceStatus.Describe(SolutionsSource, result));
@@ -163,7 +274,13 @@ namespace AutomationMonitor.Plugin
                 return;
             }
 
-            DataverseSolutionFlowSource source = NewFlowSource();
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            if (!operation.Ticket.IsBound)
+            {
+                view.Say("Connect to a Dataverse environment before using this tool.");
+                return;
+            }
+
             CancellationToken token = BeginWork();
 
             view.SetBusy(true);
@@ -173,7 +290,12 @@ namespace AutomationMonitor.Plugin
             {
                 Message = "Reading solution cloud flows...",
                 IsCancelable = true,
-                Work = (worker, args) => { args.Result = source.GetSolutionFlows(solutionId!, token); },
+                Work = (worker, args) =>
+                {
+                    ConnectedOrganization organization = operation.Resolve(token);
+                    DataverseSolutionFlowSource source = NewFlowSource(operation, organization);
+                    args.Result = WorkResult.Of(operation, organization, source.GetSolutionFlows(solutionId!, token));
+                },
                 PostWorkCallBack = args =>
                 {
                     EndWork();
@@ -185,20 +307,37 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    ProviderResult<CloudFlowSelectionResult>? result = args.Result as ProviderResult<CloudFlowSelectionResult>;
+                    WorkResult? reading = args.Result as WorkResult;
+                    if (reading == null)
+                    {
+                        view.Say("The flow read returned no result at all.");
+                        return;
+                    }
+
+                    if (IsStale(reading.Operation.Ticket, "cloud flow"))
+                    {
+                        return;
+                    }
+
+                    ProviderResult<CloudFlowSelectionResult>? result =
+                        reading.ValueAs<ProviderResult<CloudFlowSelectionResult>>();
                     if (result == null)
                     {
                         view.Say("The flow read returned no result at all.");
                         return;
                     }
 
+                    // The rows carry the organization this action verified, so the identity shown in the
+                    // Environment column is the one the workflow ids belong to - and an unresolved read says so
+                    // here rather than leaving an empty scope to be discovered later as missing flows.
+                    connectedOrganization = reading.Organization;
                     lastSelection = result.Value;
                     discoveredFlows = result.Value == null ? new List<WorkflowReference>() : result.Value.Flows;
-                    view.BindFlows(ToRows(discoveredFlows));
+                    view.BindFlows(ToRows(discoveredFlows, connectedOrganization));
                     view.Say(SourceStatus.Describe(FlowsSource, result));
-                    view.ShowCoverage(result.Value == null
+                    view.ShowCoverage((result.Value == null
                         ? "No rows were returned by this read, so nothing was added to the list."
-                        : result.Value.DescribeCoverage());
+                        : result.Value.DescribeCoverage()) + " " + DescribeEnvironment(connectedOrganization));
                     view.WatchlistButton.Enabled = result.IsUsable;
 
                     // An empty or degraded flow list is the case where "what did we ask for, and what
@@ -289,13 +428,14 @@ namespace AutomationMonitor.Plugin
                 return;
             }
 
-            if (Service == null)
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            if (!operation.Ticket.IsBound)
             {
                 view.Say("Connect to a Dataverse environment before running the probe.");
                 return;
             }
 
-            DataverseFlowRunProbe probe = new DataverseFlowRunProbe(Service);
+            DataverseFlowRunProbe probe = new DataverseFlowRunProbe(operation.ConnectedService);
             CancellationToken token = BeginWork();
             DateTimeOffset checkedAtUtc = clock.UtcNow;
 
@@ -306,7 +446,7 @@ namespace AutomationMonitor.Plugin
             {
                 Message = "Probing run history identity...",
                 IsCancelable = true,
-                Work = (worker, args) => { args.Result = probe.Run(workflowId!, checkedAtUtc, token); },
+                Work = (worker, args) => { args.Result = WorkResult.Of(operation, operation.Organization, probe.Run(workflowId!, checkedAtUtc, token)); },
                 PostWorkCallBack = args =>
                 {
                     EndWork();
@@ -319,7 +459,19 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    FlowRunProbeOutcome? outcome = args.Result as FlowRunProbeOutcome;
+                    WorkResult? reading = args.Result as WorkResult;
+                    if (reading == null)
+                    {
+                        view.Say("The probe returned no result object at all.");
+                        return;
+                    }
+
+                    if (IsStale(reading.Operation.Ticket, "run-history probe"))
+                    {
+                        return;
+                    }
+
+                    FlowRunProbeOutcome? outcome = reading.ValueAs<FlowRunProbeOutcome>();
                     if (outcome == null)
                     {
                         view.Say("The probe returned no result object at all.");
@@ -392,17 +544,20 @@ namespace AutomationMonitor.Plugin
         /// </summary>
         private void RunIdentityProbe()
         {
-            if (Service == null)
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            if (!operation.Ticket.IsBound)
             {
                 view.Say("Connect to a Dataverse environment before verifying its identity.");
                 return;
             }
 
-            // Built on the UI thread because Service and ConnectionDetail are connection state. The probe is
-            // handed the service the host already connected rather than ConnectionDetail.ServiceClient, whose
-            // getter can construct a client and start a sign-in.
+            // Built on the UI thread from the connection captured for this action. The probe is handed the
+            // service the host already connected rather than ConnectionDetail.ServiceClient, whose getter can
+            // construct a client and start a sign-in. It measures the host's own environment-id fields on
+            // purpose - that is the AM-42 measurement - and none of what it measures is used as a scope: the
+            // scope this plugin keys by comes only from ConnectedDataverseEnvironment.
             DataverseConnectionIdentityProbe probe = new DataverseConnectionIdentityProbe(
-                Service, ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId);
+                operation.ConnectedService, ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId);
 
             CancellationToken token = BeginWork();
             DateTimeOffset checkedAtUtc = clock.UtcNow;
@@ -414,7 +569,7 @@ namespace AutomationMonitor.Plugin
             {
                 Message = "Reading connected environment identity...",
                 IsCancelable = true,
-                Work = (worker, args) => { args.Result = probe.Run(checkedAtUtc, token); },
+                Work = (worker, args) => { args.Result = WorkResult.Of(operation, operation.Organization, probe.Run(checkedAtUtc, token)); },
                 PostWorkCallBack = args =>
                 {
                     EndWork();
@@ -427,7 +582,19 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    ConnectedIdentityOutcome? outcome = args.Result as ConnectedIdentityOutcome;
+                    WorkResult? reading = args.Result as WorkResult;
+                    if (reading == null)
+                    {
+                        view.Say("The identity read returned no result object at all.");
+                        return;
+                    }
+
+                    if (IsStale(reading.Operation.Ticket, "connected identity"))
+                    {
+                        return;
+                    }
+
+                    ConnectedIdentityOutcome? outcome = reading.ValueAs<ConnectedIdentityOutcome>();
                     if (outcome == null)
                     {
                         view.Say("The identity read returned no result object at all.");
@@ -464,8 +631,11 @@ namespace AutomationMonitor.Plugin
         /// </summary>
         private void VerifySavedList()
         {
-            var connectedService = Service;
-            if (connectedService == null)
+            // Captured before the read: the organization the evidence names must be the one this action
+            // resolved, through the same mechanism discovery and the saved-list scope use, and the check that
+            // the connection is still the same happens before anything is shown.
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            if (!operation.Ticket.IsBound)
             {
                 view.Say("Connect to a Dataverse environment before verifying a saved list.");
                 return;
@@ -503,7 +673,7 @@ namespace AutomationMonitor.Plugin
                 keys.Add(member.Key);
             }
 
-            DataverseWorkflowIdentitySource source = new DataverseWorkflowIdentitySource(connectedService);
+            DataverseWorkflowIdentitySource source = new DataverseWorkflowIdentitySource(operation.ConnectedService);
             DataverseWorkflowIdentityProbe probe = new DataverseWorkflowIdentityProbe(source, clock);
             CancellationToken token = BeginWork();
 
@@ -516,9 +686,14 @@ namespace AutomationMonitor.Plugin
                 IsCancelable = true,
                 Work = (worker, args) =>
                 {
-                    DataverseOrganizationIdentity organization = DataverseOrganizationIdentity.Read(connectedService, token);
+                    // The organization comes from the same resolver discovery uses, cached for this connection,
+                    // so checking a saved list costs no extra identity read and cannot name an organization some
+                    // other code path invented. An unresolved read is passed on as unverified, which the probe
+                    // answers with its own honest state instead of asking the environment nothing and reporting
+                    // the members missing.
+                    ConnectedOrganization organization = operation.Resolve(token);
                     WorkflowIdentityEvidence evidence = probe.Verify(organization.Scope, keys, token);
-                    args.Result = new SavedListReading(evidence, mgr.PreviewAssociation(listId, evidence));
+                    args.Result = new SavedListReading(operation.Ticket, organization, evidence, mgr.PreviewAssociation(listId, evidence));
                 },
                 PostWorkCallBack = args =>
                 {
@@ -538,6 +713,13 @@ namespace AutomationMonitor.Plugin
                         view.Say("The saved-list check returned no result object at all.");
                         return;
                     }
+
+                    if (IsStale(reading.Ticket, "saved-list check"))
+                    {
+                        return;
+                    }
+
+                    connectedOrganization = reading.Organization ?? ConnectedOrganization.NotAttempted;
 
                     string report = reading.Evidence.Describe() + Environment.NewLine + reading.Preview.Describe();
                     LogProbeResult(
@@ -581,16 +763,28 @@ namespace AutomationMonitor.Plugin
         }
 
         /// <summary>
-        /// The two Core values one saved-list check produced, carried across the worker boundary as one object so
-        /// the status line and the report can never disagree about which read they describe.
+        /// The Core values one saved-list check produced, carried across the worker boundary as one object with
+        /// the connection ticket and organization they were read against, so the status line, the report and the
+        /// environment label can never disagree about which read they describe - and so a result from a
+        /// connection that is gone can be thrown away whole rather than half-applied.
         /// </summary>
         private sealed class SavedListReading
         {
-            public SavedListReading(WorkflowIdentityEvidence evidence, WatchlistAssociationPreview preview)
+            public SavedListReading(
+                ConnectionTicket ticket,
+                ConnectedOrganization organization,
+                WorkflowIdentityEvidence evidence,
+                WatchlistAssociationPreview preview)
             {
+                Ticket = ticket;
+                Organization = organization;
                 Evidence = evidence;
                 Preview = preview;
             }
+
+            public ConnectionTicket Ticket { get; }
+
+            public ConnectedOrganization? Organization { get; }
 
             public WorkflowIdentityEvidence? Evidence { get; }
 
@@ -652,13 +846,17 @@ namespace AutomationMonitor.Plugin
         }
 
         /// <summary>
-        /// The scope saved watchlists are keyed by, normalized by the one Core rule. An empty value means the
-        /// connection reported no environment id: a legitimate unscoped scope, and never a stand-in for
-        /// "the catalogue has not been read yet".
+        /// The scope saved watchlists are keyed by: the verified connected organization, or empty when this
+        /// session has not established one. It is the same value discovery keyed its rows with, which is what
+        /// makes a saved list and a freshly found flow mean the same environment - and it is never
+        /// <c>ConnectionDetail.EnvironmentId</c>, measured empty on this connection, nor a stored scope copied
+        /// across from wherever the operator happened to be. An empty value here means unverified, never
+        /// "the catalogue has not been read yet": that distinction is <see cref="lastReadScope"/>'s job and
+        /// <see cref="WatchlistScope.NeedsRead"/> is the only rule that acts on the pair.
         /// </summary>
         private string EnvironmentScope
         {
-            get { return WatchlistScope.Normalize(ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId); }
+            get { return environments.Current.ScopeText; }
         }
 
         /// <summary>
@@ -730,7 +928,7 @@ namespace AutomationMonitor.Plugin
             List<SavedWatchlistChoice> choices = new List<SavedWatchlistChoice>();
             foreach (Watchlist list in mgr.Lists(environmentScope))
             {
-                choices.Add(new SavedWatchlistChoice(list.Id, list.Name + "  (" + list.Members.Count + " member(s))"));
+                choices.Add(new SavedWatchlistChoice(list.Id, SavedListLabel(list)));
             }
 
             view.BindSavedWatchlists(choices, keepId);
@@ -763,7 +961,12 @@ namespace AutomationMonitor.Plugin
                 return;
             }
 
-            string environmentScope = EnvironmentScope;
+            // The scope this listing is done for is captured with the connection, and reading the file stays a
+            // local read: opening the Saved list must work with no Dataverse connection at all, so the identity
+            // read is not triggered here - it is whatever the last completed action established, empty until
+            // then, and the operator is told the lists are not environment-scoped in that case.
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            string environmentScope = operation.ScopeText;
             BeginWork();
             view.SetBusy(true);
             view.Say("Reading saved watchlists from this machine...");
@@ -772,7 +975,7 @@ namespace AutomationMonitor.Plugin
             {
                 Message = "Reading saved watchlists...",
                 IsCancelable = true,
-                Work = (worker, args) => { args.Result = mgr.Load(); },
+                Work = (worker, args) => { args.Result = WorkResult.Of(operation, operation.Organization, mgr.Load()); },
                 PostWorkCallBack = args =>
                 {
                     EndWork();
@@ -786,7 +989,21 @@ namespace AutomationMonitor.Plugin
                         return;
                     }
 
-                    WatchlistStoreResult? result = args.Result as WatchlistStoreResult;
+                    WorkResult? reading = args.Result as WorkResult;
+                    if (reading == null)
+                    {
+                        lastReadScope = null;
+                        view.SetWatchlistState(DescribeState());
+                        view.Say("Saved watchlists - no result was returned. The file on disk was not changed.");
+                        return;
+                    }
+
+                    if (IsStale(reading.Operation.Ticket, "saved watchlist"))
+                    {
+                        return;
+                    }
+
+                    WatchlistStoreResult? result = reading.ValueAs<WatchlistStoreResult>();
                     if (result == null)
                     {
                         lastReadScope = null;
@@ -794,6 +1011,8 @@ namespace AutomationMonitor.Plugin
                         view.Say("Saved watchlists - no result was returned. The file on disk was not changed.");
                         return;
                     }
+
+                    connectedOrganization = reading.Organization;
 
                     // Only a usable read arms the cache. A refusal leaves the catalog empty on purpose and the
                     // next drop-down must try again, because the operator may have repaired or replaced the
@@ -873,7 +1092,6 @@ namespace AutomationMonitor.Plugin
                 return;
             }
 
-            string environmentScope = EnvironmentScope;
             SolutionReference solution = chosen.Solution;
             IReadOnlyList<WorkflowReference> flows = discoveredFlows;
             ProviderResultState state = selection.Flows.Count == 0 && selection.RowsRead == 0
@@ -881,7 +1099,12 @@ namespace AutomationMonitor.Plugin
                 : ProviderResultState.Complete;
             string? coverageNote = selection.DescribeCoverage();
 
-            BeginWork();
+            // Captured before the work starts: the save is written under the connection and organization this
+            // action began with, and refused outright if the connection is gone by the time the write would
+            // happen. Storing freshly discovered flows under whatever environment is connected at the moment of
+            // the write is how two environments end up inside one saved list.
+            DataverseOperation operation = environments.BeginOperation(Service, ConnectionDetail);
+            CancellationToken token = BeginWork();
             view.SetBusy(true);
             view.Say("Saving the watchlist to this machine...");
 
@@ -891,7 +1114,14 @@ namespace AutomationMonitor.Plugin
                 IsCancelable = true,
                 Work = (worker, args) =>
                 {
-                    args.Result = SaveOverManager(mgr, environmentScope, name, solution, flows, state, coverageNote);
+                    ConnectedOrganization organization = operation.Resolve(token);
+                    if (!environments.IsCurrent(operation.Ticket))
+                    {
+                        args.Result = SaveOutcome.Discarded(ConnectionContext.DescribeDiscard("watchlist save"));
+                        return;
+                    }
+
+                    args.Result = SaveOverManager(mgr, organization, name, solution, flows, state, coverageNote);
                 },
                 PostWorkCallBack = args =>
                 {
@@ -902,6 +1132,15 @@ namespace AutomationMonitor.Plugin
                     if (args.Error != null)
                     {
                         outcome = SaveOutcome.Failed(DescribeStorageError(args.Error));
+                    }
+
+                    if (outcome.WasDiscarded)
+                    {
+                        // Nothing was written, so nothing about the saved file changed and the catalogue this
+                        // session read is still the one to show. Saying "could not save" here would be a lie.
+                        view.SetWatchlistState(DescribeState());
+                        view.Say(outcome.Message);
+                        return;
                     }
 
                     if (!outcome.Success || outcome.Saved == null)
@@ -920,10 +1159,12 @@ namespace AutomationMonitor.Plugin
                     watchlistIsSaved = true;
 
                     // The save read the file first and the drop-down was just bound from the result, so this
-                    // session has genuinely read this scope.
-                    lastReadScope = environmentScope;
+                    // session has genuinely read this scope - and it is the scope the list was written under,
+                    // not whatever the connection reports now.
+                    connectedOrganization = outcome.Organization;
+                    lastReadScope = outcome.Organization.ScopeText;
                     view.ShowWatchlist(outcome.Saved);
-                    BindSavedWatchlists(mgr, environmentScope, outcome.Saved.Id);
+                    BindSavedWatchlists(mgr, outcome.Organization.ScopeText, outcome.Saved.Id);
                     view.SetSaveEnabled(false);
                     view.SetWatchlistState("Saved");
                     view.Say(outcome.Message);
@@ -935,19 +1176,28 @@ namespace AutomationMonitor.Plugin
         /// The whole save, on the worker. It reads the file first so this save ADDS to what is already stored
         /// rather than replacing it (the manager's catalog is empty until it is loaded, and writing an empty
         /// catalog would silently drop the operator's other saved lists). It then creates a snapshot list under
-        /// the chosen name scoped to the environment, imports the discovered flows with their solution
-        /// provenance and coverage, and writes once. Every failure keeps the file untouched - a change is in
-        /// memory until Save - and reloads so a half-built list cannot linger in memory.
+        /// the chosen name scoped to the organization this action verified, imports the discovered flows with
+        /// their solution provenance and coverage, and writes once. Every failure keeps the file untouched - a
+        /// change is in memory until Save - and reloads so a half-built list cannot linger in memory.
+        ///
+        /// <para>
+        /// The scope is authored here rather than derived from the members: a list built from verified discovery
+        /// is created with the organization its flows were read from, which is a fact about this action. What it
+        /// is never allowed to do is adopt a scope from a member key - that path belongs to the association, and
+        /// <see cref="WatchlistManager"/> refuses it.
+        /// </para>
         /// </summary>
         private static SaveOutcome SaveOverManager(
             WatchlistManager mgr,
-            string environmentScope,
+            ConnectedOrganization organization,
             string name,
             SolutionReference solution,
             IReadOnlyList<WorkflowReference> flows,
             ProviderResultState state,
             string? coverageNote)
         {
+            string environmentScope = organization.ScopeText;
+
             WatchlistStoreResult read = mgr.Load();
             if (!read.IsUsable)
             {
@@ -976,7 +1226,7 @@ namespace AutomationMonitor.Plugin
             }
 
             Watchlist? stored = mgr.Find(id);
-            return SaveOutcome.Succeeded(stored ?? created.Watchlist, saved.Describe());
+            return SaveOutcome.Succeeded(stored ?? created.Watchlist, organization, saved.Describe());
         }
 
         private void OpenWatchlist()
@@ -1017,7 +1267,7 @@ namespace AutomationMonitor.Plugin
 
             watchlist = opened;
             watchlistIsSaved = true;
-            view.BindFlows(ToRows(IncludedWorkflows(opened)));
+            view.BindFlows(ToRows(IncludedWorkflows(opened), connectedOrganization));
             view.ShowWatchlist(opened);
             view.SetBusy(false);
             view.SetSaveEnabled(false);
@@ -1028,27 +1278,44 @@ namespace AutomationMonitor.Plugin
         /// <summary>Carries a save result off the worker thread without touching controls there.</summary>
         private sealed class SaveOutcome
         {
-            private SaveOutcome(bool success, Watchlist? saved, string message)
+            private SaveOutcome(bool success, bool discarded, Watchlist? saved, ConnectedOrganization organization, string message)
             {
                 Success = success;
+                WasDiscarded = discarded;
                 Saved = saved;
+                Organization = organization ?? ConnectedOrganization.NotAttempted;
                 Message = message;
             }
 
             public bool Success { get; }
 
+            /// <summary>True when the connection changed before the write: nothing was saved and nothing failed.</summary>
+            public bool WasDiscarded { get; }
+
             public Watchlist? Saved { get; }
+
+            /// <summary>
+            /// The organization the list was actually written under. The callback re-binds the drop-down with it
+            /// rather than with whatever scope the connection reports by then, so a save is always shown in the
+            /// environment it was stored in.
+            /// </summary>
+            public ConnectedOrganization Organization { get; }
 
             public string Message { get; }
 
-            public static SaveOutcome Succeeded(Watchlist saved, string message)
+            public static SaveOutcome Succeeded(Watchlist saved, ConnectedOrganization organization, string message)
             {
-                return new SaveOutcome(true, saved, message);
+                return new SaveOutcome(true, false, saved, organization, message);
             }
 
             public static SaveOutcome Failed(string message)
             {
-                return new SaveOutcome(false, null, message);
+                return new SaveOutcome(false, false, null, ConnectedOrganization.NotAttempted, message);
+            }
+
+            public static SaveOutcome Discarded(string message)
+            {
+                return new SaveOutcome(false, true, null, ConnectedOrganization.NotAttempted, message);
             }
         }
 
@@ -1073,27 +1340,96 @@ namespace AutomationMonitor.Plugin
             LogError("Automation Monitor could not read " + sourceLabel + ".");
         }
 
-        private static IEnumerable<FlowRow> ToRows(IReadOnlyList<WorkflowReference> flows)
+        /// <summary>
+        /// One action's result, carried across the worker boundary together with the connection it was read
+        /// under and the organization that was verified for it. A callback that cannot find that connection
+        /// still current discards the value rather than showing or storing it, so no result can be applied to,
+        /// re-labelled by, or saved under a connection that arrived while the work was running.
+        /// </summary>
+        private sealed class WorkResult
+        {
+            private WorkResult(DataverseOperation operation, ConnectedOrganization organization, object? value)
+            {
+                Operation = operation;
+                Organization = organization;
+                Value = value;
+            }
+
+            public DataverseOperation Operation { get; }
+
+            public ConnectedOrganization Organization { get; }
+
+            public object? Value { get; }
+
+            public static WorkResult Of(DataverseOperation operation, ConnectedOrganization organization, object? value)
+            {
+                return new WorkResult(operation, organization, value);
+            }
+
+            public T? ValueAs<T>() where T : class
+            {
+                return Value as T;
+            }
+        }
+
+        private static IEnumerable<FlowRow> ToRows(IReadOnlyList<WorkflowReference> flows, ConnectedOrganization connected)
         {
             List<FlowRow> rows = new List<FlowRow>();
             foreach (WorkflowReference flow in flows)
             {
-                rows.Add(FlowRow.From(flow));
+                rows.Add(FlowRow.From(flow, connected));
             }
 
             return rows;
         }
 
-        /// <summary>The gateway is built on the UI thread because Service is connection state.</summary>
-        private DataverseSolutionFlowSource NewFlowSource()
+        /// <summary>
+        /// The flow source for one action: the service that action captured, projected with the organization it
+        /// resolved. Neither <c>Service</c> nor <c>ConnectionDetail</c> is read here, so an environment switch
+        /// mid-read cannot swap the connection or the scope under a discovery that had already started, and the
+        /// identity every discovered flow is keyed by is the one this action verified.
+        /// </summary>
+        private DataverseSolutionFlowSource NewFlowSource(DataverseOperation operation, ConnectedOrganization organization)
         {
-            if (Service == null)
+            return new DataverseSolutionFlowSource(operation.NewGateway(organization), clock);
+        }
+
+        /// <summary>
+        /// The drop-down line: the operator's own name, the member count, and the environment state whenever the
+        /// list is not the organization this session verified. A legacy unscoped list therefore reads as
+        /// unverified instead of looking like it belongs to whatever is connected now, which is the whole point
+        /// of leaving its stored scope empty.
+        /// </summary>
+        private string SavedListLabel(Watchlist list)
+        {
+            string label = list.Name + "  (" + list.Members.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + " member(s))";
+            ResourceScope scope = ResourceScope.Read(list.EnvironmentId);
+            if (connectedOrganization.IsResolved && scope.IsSameResourceAs(connectedOrganization.Scope))
             {
-                throw new InvalidOperationException("Connect to a Dataverse environment before using this tool.");
+                return label;
             }
 
-            DataverseGateway gateway = new DataverseGateway(Service, ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId);
-            return new DataverseSolutionFlowSource(gateway, clock);
+            return label + "  [" + EnvironmentDisplay.Describe(list.EnvironmentId, connectedOrganization) + "]";
+        }
+
+        /// <summary>
+        /// The one sentence about the environment this action established, shown as coverage rather than hidden:
+        /// rows and saved lists are only as well-identified as the organization behind them, and a read that
+        /// could not name one must be visible on screen instead of quietly storing an empty scope.
+        /// </summary>
+        private static string DescribeEnvironment(ConnectedOrganization organization)
+        {
+            if (organization.IsResolved)
+            {
+                return "Environment: " + EnvironmentDisplay.DescribeConnected(organization) + ".";
+            }
+
+            string reason = organization.State == ConnectedOrganizationState.NotAttempted
+                ? "no identity read has run on this connection yet"
+                : "this connection did not name an organization (" + (organization.FailureKind ?? "read refused") + ")";
+
+            return "Environment: " + EnvironmentDisplay.UnverifiedText + " - " + reason
+                + ", so flows discovered now and lists saved now are recorded without an environment scope.";
         }
 
         private CancellationToken BeginWork()

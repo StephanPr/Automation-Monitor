@@ -25,7 +25,15 @@ namespace AutomationMonitor.Plugin.Connectivity
     {
         private readonly IOrganizationService service;
 
-        public DataverseGateway(IOrganizationService service, string? environmentId)
+        /// <summary>
+        /// <paramref name="organizationScope"/> is the kind-qualified scope of the connected organization
+        /// (<c>dataverse-organization:&lt;guid&gt;</c>) as <see cref="ConnectedDataverseEnvironment"/> resolved it,
+        /// or null when this session has not verified one. It becomes the scope half of every workflow identity
+        /// produced from these rows, so it is never a Power Platform environment id, never a connection url and
+        /// never a friendly name - and passing null is the honest way to say "we do not know where these rows came
+        /// from", which yields unscoped identities that cannot merge with a verified environment's.
+        /// </summary>
+        public DataverseGateway(IOrganizationService service, string? organizationScope)
         {
             if (service == null)
             {
@@ -33,10 +41,14 @@ namespace AutomationMonitor.Plugin.Connectivity
             }
 
             this.service = service;
-            EnvironmentId = string.IsNullOrWhiteSpace(environmentId) ? null : environmentId!.Trim();
+            EnvironmentId = string.IsNullOrWhiteSpace(organizationScope) ? null : organizationScope!.Trim();
         }
 
-        /// <summary>Environment id from the XrmToolBox connection; null when it is not reported.</summary>
+        /// <summary>
+        /// The verified organization scope of the rows this gateway reads, or null when none was verified.
+        /// The name is the core seam's, for compatibility with the run reader; the value it holds is a
+        /// kind-qualified resource scope, never a bare environment identifier.
+        /// </summary>
         public string? EnvironmentId { get; }
 
         public Page<SolutionReference>? ReadSolutions(PageRequest request, CancellationToken cancellationToken)

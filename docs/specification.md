@@ -269,7 +269,9 @@ A watchlist must be able to hold workflows from more than one Dataverse environm
 7. Adding an environment to a list must never require rewriting the identity of members already in it.
 8. A list whose environment is unverified stays unverified. Re-identification requires verification against the environment and explicit operator confirmation, and never assigns the currently connected environment automatically.
 9. Identity kinds are never conflated: a Power Platform environment id and a Dataverse organization id are different values, and a connection id, tenant id, friendly name or URL is not resource identity (see `docs/provider-capabilities.md`).
-10. The storage layout, schema version and migration format for a multi-environment list are **open design decisions** owned by AM-43 and AM-44 in `docs/roadmap.md`. This section states the capability, not its encoding.
+10. The storage layout, serialization and schema version for a list that holds **several** environments are **open design decisions** owned by the multi-environment checkpoint in `docs/roadmap.md`. What AM-43 has since decided is narrower and is recorded in `docs/provider-capabilities.md`: the kind-qualified scope token that names one Dataverse organization inside the scope fields that already exist, and the rule that a scope this build cannot interpret is preserved rather than dropped. This section still states the capability, not its multi-environment encoding.
+11. Recognizing a scope is not confirming one. A scope that parses, a connection that this session has verified as that organization, and a stored list the operator has confirmed against it are three different claims, and only the third may change stored identity (see `docs/provider-capabilities.md`).
+12. Membership survives what this build does not understand. A member whose stored scope its reader cannot interpret is written back unchanged, or the list is refused for modification — never dropped, because a member is operator content and an older or partially compatible plugin has no right to delete it.
 
 ---
 
@@ -717,6 +719,7 @@ The final project/file layout can evolve. Dependencies should flow from UI → a
 | `TenantId` | May be unknown for some Dataverse-only contexts. |
 | `EnvironmentId` | Power Platform environment, where applicable. Supplied by the host, and **absent on some connection types** — see `docs/provider-capabilities.md`. |
 | `OrganizationId` | Dataverse organization identity, from `WhoAmIResponse.OrganizationId`. A different identifier from `EnvironmentId`: both are kept when both are known, each under its own identity kind, and neither is written into the other's field. |
+| `ResourceScope` | The kind-qualified token carried by `WorkflowKey.ScopeId` — `dataverse-organization:<canonical-guid>` today, empty when unverified. It names the *kind* of identifier deliberately: two GUIDs of different kinds must never be mistaken for one scope. The empty value means unverified and is never completed from the active connection. |
 | `SubscriptionId` | Azure subscription, where applicable. |
 | `ResourceGroup` | Azure resource group, where applicable. |
 | `HostResourceId` | Azure ARM resource ID for a Standard host, where applicable. |
@@ -725,7 +728,10 @@ The final project/file layout can evolve. Dependencies should flow from UI → a
 | `DisplayScope` | Solution, application, resource group, watchlist metadata. |
 | `IsRunHistorySupported` | Indicates a known limitation such as stateless Standard. |
 
-The **canonical workflow key** includes its provider and scope, not just its name.
+The **canonical workflow key** includes its provider and scope, not just its name. Its text form
+(`provider:scope:workflow`) is an opaque key and never a format to parse back into parts: the scope segment itself
+may contain a colon, and the implemented file stores provider, scope and workflow id as three separate fields for
+exactly that reason. See `docs/provider-capabilities.md` for the scope token and what each of its states licenses.
 
 ### 14.2 Run record
 
@@ -761,7 +767,7 @@ qualifier out. See `docs/provider-capabilities.md` for what the current source c
   "membershipMode": "snapshot",
   "sourceSolutions": ["SOLUTION_ID"],
   "workflows": [
-    "powerautomate:ENVIRONMENT_ID:WORKFLOW_ID",
+    "powerautomate:dataverse-organization:ORGANIZATION_ID:WORKFLOW_ID",
     "logicapps-consumption:SUBSCRIPTION_ID:RESOURCE_ID"
   ],
   "excludedWorkflowKeys": [],
@@ -770,6 +776,12 @@ qualifier out. See `docs/provider-capabilities.md` for what the current source c
 ```
 
 IDs are placeholders. Actual persisted configuration should support per-workflow overrides, source scope identity, schema migration, and safe sharing without credentials.
+
+This is a conceptual sketch, not the M4 file. The implemented store keeps each member's provider, scope and workflow
+id as three separate fields rather than the colon-joined text above, keeps inclusion as a per-member flag rather than
+an excluded-key list, and writes ISO 8601 UTC timestamps; section 17 records its real shape. The kind-qualified scope
+token in the example is the decided Dataverse form (`docs/provider-capabilities.md`); a legacy member written before
+it has an empty scope, which means unverified rather than invalid.
 
 ### 14.4 Suggested interfaces (illustrative)
 
@@ -892,13 +904,33 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
   for, another.
 - An empty scope is **unverified identity**, not a scope that can be matched or completed. Two connections
   that both report no environment id may be two different environments, so a legacy unscoped list is never
-  re-keyed automatically to whatever environment is connected. Any future re-identification requires
-  verification against the environment plus explicit operator confirmation, keeps the previous file through the
-  normal backup path, and is proven by migration tests over a populated legacy file.
+  re-keyed automatically to whatever environment is connected. Attaching a verified identity to one is an
+  operator action and needs three things: a **completed** read-only verification of the stored member ids, a
+  preview that states what will change and what cannot, and an explicit confirmation. A workflow id that exists in
+  the connected organization is evidence about that id, not proof of where the list came from — a solution import
+  can carry the same workflow id into another environment — so an unresolved or partial read refuses the action
+  rather than proceeding on the members it managed to check.
+- The backup that action relies on is the settings store's own: `watchlists.json.bak`, written beside
+  `watchlists.json` in the plugin's `AutomationMonitor` settings folder by the ordinary save path, with the scratch
+  `watchlists.json.new` and the dated `watchlists.corrupt-…` / `watchlists.displaced-…` copies alongside it. That is
+  a different place from `PluginBackups\AutomationMonitor\<timestamp>`, which holds the **plugin DLLs** a deploy or
+  install replaced and never a watchlist.
+- The Dataverse scope token, its states and the reason the kind is part of the stored text are recorded in
+  `docs/provider-capabilities.md`. Attaching one is a change of **value** inside fields that already exist, and it
+  stays `schemaVersion` 1 **only while that is proven**: the previous build must be shown to read a file carrying
+  kind-qualified scopes and write the same text back. No new field may be introduced under version 1, because a
+  build without a member for it would discard the value on its next save. If the round trip fails, versioning is
+  revisited before any write.
+- Anything a build cannot interpret must not be destroyed by it. A member whose stored scope the reader does not
+  recognise is written back unchanged or the list is refused for modification. Today a member whose `provider` token
+  is unknown is skipped on read, which means the next save from that build would drop it; closing that gap is part of
+  the identity checkpoint, not an accepted behaviour.
 - Scope derivation is not a display concern: `WorkflowKey.ScopeId` participates in every stored member key and
-  in `RunKey`, so substituting a newly available identity would re-key every stored member. No identity enters
-  it before its availability and stability have been measured live and written up in
-  `docs/provider-capabilities.md` (AM-42 in `docs/roadmap.md`).
+  in `RunKey`, so changing what the plugin puts there re-keys every stored member. The Dataverse identity source is
+  decided — the organization id from the authenticated `WhoAmIRequest` — but derivation itself stays as it is until
+  that re-key has been confirmed by the operator. Adding a flow whose scope is known to a list whose scope is not
+  must not associate the list silently: same-scope handling stays as it is, and moving a list from unverified to a
+  named scope happens only through the confirmed action above.
 
 
 ### Packaging
@@ -1018,6 +1050,16 @@ Only after explicit redesign and risk review: enable/disable workflows, cancel r
 - **AC-23:** Closing XrmToolBox stops all polling/local notifications; the app makes no unattended monitoring claim.
 - **AC-24:** The plugin performs no workflow modification, cancellation, or resubmission in the initial releases.
 
+### Environment identity and scope
+
+- **AC-25:** Given a stored watchlist whose members carry no scope, opening it on any connection lists it, binds its members, and writes nothing; its environment is described as unverified, never as the connected one.
+- **AC-26:** A scope token that parses is presented as **recognized**, not verified. Wording that claims confirmation of membership appears only where a completed read in the reported statement supports it.
+- **AC-27:** The action that attaches a verified identity is refused when its verification read is partial, unauthorized, unavailable, or leaves any member unresolved; refusal names the reason and leaves the file byte-identical.
+- **AC-28:** Applying the confirmed attachment re-keys that list's members, moves the environment's active selection with them in the same write, reports no change when repeated, and is recoverable from the settings store's own `watchlists.json.bak`.
+- **AC-29:** A member whose stored scope or provider this build cannot interpret survives its next save unchanged, or the list is refused for modification. No test may assert that such a member is dropped.
+- **AC-30:** The previously released build reads a file carrying kind-qualified scopes and writes the same scope text back. If it parses the value but changes or loses it, the version-1 plan is revisited before any scope is written.
+- **AC-31:** The same workflow id under two different organization scopes remains two members with two run streams, and neither merges with an unscoped member holding the same id.
+
 ---
 
 ## 20. Risks, limitations, and mitigations
@@ -1037,6 +1079,9 @@ Only after explicit redesign and risk review: enable/disable workflows, cancel r
 | Date/time and DST | Incorrect historical totals | Store UTC and explicit time zone, half-open intervals, DST tests. |
 | Sensitive error content in exports | Privacy or security exposure | Metadata-first export, opt-in details, redaction, no tokens/payloads by default. |
 | Library conflicts in XrmToolBox | Plugin load errors | Bundle/resolve DLLs per XrmToolBox guidance; test against current host. |
+| Re-keying stored members on an inferred identity | A watchlist proven to load becomes empty or splits in two | Identity source decided, derivation unchanged until an operator-confirmed action; same-scope handling preserved; unknown scopes preserved; migration tests over a populated legacy file. |
+| An older build saving a file it only partly understands | New scope values, or future-provider members, lost on the next save with no trace | Change values not fields under `schemaVersion` 1; prove the previous build's read **and** write round trip before the first write; refuse modification instead of dropping a member. |
+| One settings folder roaming between workstations | A list recognized for one organization opened against another | Scope names its kind, coverage names what a read actually covered, and no query is sent for a scope the current connection has not been verified against. |
 
 ---
 

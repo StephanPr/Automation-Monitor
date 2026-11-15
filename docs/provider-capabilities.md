@@ -224,7 +224,8 @@ that reports presence, identifier shape and that one comparison — and *nothing
 returns is incapable of holding a value. **Its result is not recorded yet**: it needs the maintainer's own
 XrmToolBox session, and no agent connects to an environment. Multi-environment watchlists are a required later
 capability and are specified in `docs/specification.md`; their storage format, schema version and migration shape
-are deliberately **not** decided by this investigation, and AM-42 changes no scope, no stored key and no file.
+are **still** not decided — those belong to the multi-environment checkpoint. What has since been decided is the
+single-environment scope contract below (AM-43, design only); AM-42 itself changes no scope, no stored key and no file.
 
 The organization id and the environment id are deliberately **not** compared with each other. They are different
 identity kinds, and a line reading "these two differ" would look like a defect instead of a definition.
@@ -242,6 +243,114 @@ identity kinds, and a line reading "these two differ" would look like a defect i
   name makes `RetrieveMultiple` refuse the **whole** query (the `primarycategory` class), so it may only be
   measured one candidate column per isolated query.
 - On-premises and ADX connections remain unrecorded for every identity field above.
+
+## The resource scope contract (AM-43, design decision recorded 2026-11-15)
+
+This section is a **decision and its evidence**, not a measurement. No build has written anything it describes:
+`schemaVersion` is still 1 and the operator's `watchlists.json` still holds one list of 59 members whose `scopeId`
+is empty. It also does not depend on AM-42's outstanding live read — the contract holds whichever identifiers that
+probe reports, and the gate for its run stays open in `docs/roadmap.md` section 3.
+
+### Four states, and what each may claim
+
+| State | Established by | What it licenses | What it must never be called |
+|---|---|---|---|
+| **Unverified** | The scope field is empty — the ordinary state on a connection that reports no environment id | Reading and listing the watchlist on any connection, labelled as not environment-scoped | "this environment"; a value that matches a scope |
+| **Recognized** | The scope text parses as a known kind token plus a well-formed id | Equality between two scopes; naming the kind; offering to verify it | **verified.** That a string is well formed says nothing about whether it names the operator's environment, or where it came from |
+| **Connected** | One read-only `WhoAmIRequest` on the service the host already connected answers with that same organization id, in this session | Querying that organization, and saying "this connection is that organization" | Proof that a stored list belongs to it |
+| **Associated** | A **completed** verification read of the stored member ids, a preview the operator can read, and an explicit confirmation | Writing a qualified scope into that list's stored keys | Automatic, inferred, or derived from whatever is connected |
+
+Only **associated** authorises a change to stored identity, and only **connected** authorises a query. A file can
+hold a recognized scope that was never associated — hand-edited, or carried in from another workstation — so the
+plugin presents such a list as recognized and lets the next read report what it actually found. It does not claim a
+confirmation it does not hold. Remembering *when* a list was associated would need a new stored field, which the
+version-1 boundary below forbids; the durable fact is the scope itself, and membership truth comes from the read
+that reports it.
+
+### The token
+
+The Dataverse resource scope is a kind-qualified token stored **in the fields that already exist** (`scopeId` per
+member, `environmentId` per list and per environment profile), not a new field:
+
+```
+dataverse-organization:<canonical-guid>
+```
+
+| Rule | Decision |
+|---|---|
+| Why the kind is in the text | A Power Platform environment id and a Dataverse organization id are both GUIDs under the same `ProviderKind`. A bare GUID cannot say which kind it is, so an environment-scoped list from one workstation would silently disagree — or wrongly agree — with an organization-scoped one. Naming the kind inside the value makes the "never one into the other's field" rule structural |
+| Implemented kind | `dataverse-organization`, from `WhoAmIResponse.OrganizationId` — the maintainer-approved Dataverse identity source, and the only one reachable through the connection the host already owns |
+| Reserved kinds | `powerplatform-environment` (no investigation approved to obtain it on this connection type; nothing in this contract needs it); `azure-subscription`, `azure-resource-group` and `logicapps-standard-host` for AM-45 |
+| Grammar | `<kind-token>:<id>`, split on the **first** colon only, so a future ARM resource id containing `/` or `:` survives whole. Tokens are lower-case, matching `ProviderKinds.Prefix` |
+| Id form | Dashed lower-case GUID. `CanonicalId.Text`, which `WorkflowKey` applies to the scope, only trims and lower-cases — unlike `CanonicalId.Identifier` it does **not** collapse `{…}` or undashed spellings, so a scope factory must emit the canonical dashed form and AM-44.1 must make scope canonicalisation collapse the spellings the same way. Every stored scope is empty today, so this is fixable before a value exists |
+| Unverified | The empty string, unchanged, never equal to a qualified scope and never completed from the active connection |
+| Unknown kind token | Preserved, never dropped — the next section |
+| Canonical key text | `provider:scope:workflow` stays an **opaque** key. Once the scope holds a colon it can no longer be split into parts, and nothing may try: no code in `src/` parses `WorkflowKey.Canonical` back, member identity is persisted as three separate fields, and exclusion state persists per member (`Watchlist.ExcludedWorkflowKeys` is derived, not stored) |
+
+A recognized scope never makes a list invisible or unopenable. It makes the *difference* visible: today two lists
+that both report no environment id are indistinguishable, which is the dangerous case AM-40 exposed, and a named
+kind at least lets a list say which environment it believes it belongs to.
+
+### A scope this build cannot interpret is preserved, never dropped
+
+A member whose scope text this build does not recognise must either survive that build's next save **unchanged in
+the same field**, or the build must refuse to modify that watchlist at all. Dropping it is not an option: a member
+is operator-owned content, and a plugin that quietly deletes a membership it cannot understand has destroyed data it
+had no right to change. Preserving a scope costs nothing, because the field is plain pass-through text — the writer
+copies `Key.ScopeId` and the reader feeds `stored.ScopeId` straight into `WorkflowKey.Create`, which only trims and
+lower-cases it.
+
+The same hazard is **not yet resolved for the `provider` field**, and it is the sharper case: `SettingsMap` today
+skips a member whose `provider` token it does not know, because no `WorkflowKey` can be built without a
+`ProviderKind`. A build that predates a future provider would therefore drop those members the next time it saved
+that list. The fix is a refusal to modify rather than a silent skip, and it is named here as an open compatibility
+decision for AM-44.1 rather than changed by this design pass.
+
+### `schemaVersion` 1 is approved conditionally, and the condition is a test
+
+Storing a qualified scope is a change of **value**, not of format, so it needs no version bump: `scopeId` and
+`environmentId` have been untyped text since the first committed version of this file (`a23f216`), no committed
+build has ever parsed their contents, and this build's reader and writer round-trip an arbitrary trimmed
+lower-case string through both fields. A length cap is not in the way either — `SettingsFormat.Text` caps names and
+notes, but the scope field is passed to `WorkflowKey.Create` uncapped.
+
+A **new field** is a different matter. `DataContractJsonSettingsSerializer` is the framework's
+`DataContractJsonSerializer`, which has nowhere to hold a member its type does not declare. The suite already
+relies on that: `AFieldThisBuildDoesNotKnowIsIgnoredRatherThanFatal` proves a build reads past a field it does not
+know — and proves nothing about what it writes back, because the unknown value cannot survive a save by a build
+that has no member for it. That asymmetry is the boundary:
+
+- **Permitted under version 1:** new *values* in the existing scope fields.
+- **Not permitted under version 1:** any new field — `scopeKind`, `verifiedAt`, an environment array. A build that
+  met one would silently discard it for anyone still running the previous version.
+
+Before the first write of a qualified scope, AM-44.1 must prove the round trip **with the previous build**, not by
+reasoning about it: in a scratch `git worktree` at the commit before it, read a fixture whose members carry
+`dataverse-organization:<guid>` scopes, and assert that the members come back with that exact scope text and that a
+save from that build writes the same text. If the older build parses the value but corrupts, rewrites or discards it,
+that is the stop condition: revisit versioning or add a compatibility barrier, rather than shipping a file the
+previous release damages.
+
+### Display identity is separate from key identity
+
+The stored token is for matching, never for reading. What an operator sees is a label resolved from verified
+connection context — a friendly name observed in the same session as the organization read, otherwise a short
+fingerprint of the id, otherwise "unknown environment" — and the label never participates in a key, a dictionary or
+a comparison. Names and URL names are mutable and collide, which is why they are context and not identity in the
+table above. Raw identifiers stay out of status lines, logs and exports: `DiscoveryRows` printing the scope verbatim
+is the shape this rule forbids.
+
+### Decided here, and deliberately not
+
+Decided: the four states; `dataverse-organization:<canonical-guid>` as the Dataverse scope token in the existing
+fields; the empty string as unverified; unknown scopes preserved or refused; `schemaVersion` 1 with the round-trip
+condition above; the organization id as the identity source, with no further environment-id hunt.
+
+Not decided, and owned by the later multi-environment checkpoint: whether one watchlist may hold members from
+several organizations at once, how the Saved list filters when it does, how such a list is serialized, and what
+becomes of today's one-environment-per-list rule. The capability stays mandatory
+(`docs/specification.md` section 6.6) and the token above is what makes it expressible; none of it is approved by
+this section.
 
 ## Power Automate run history (`flowrun`) — M3
 

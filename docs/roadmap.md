@@ -7,7 +7,14 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-15 - AM-40, the defect the first live save-and-reopen exposed: a persisted watchlist
+Last updated: 2026-11-15 - **AM-43 recorded as a design decision, documentation only.** The canonical Dataverse
+resource scope, the four identity states that keep "recognized", "connected" and "associated" apart, the safeguards on
+attaching an identity to a legacy unscoped list, and the condition on which `schemaVersion` 1 stays unchanged are now
+written up in `docs/provider-capabilities.md` and tested against acceptance criteria AC-25 to AC-31 in
+`docs/specification.md`. AM-42's live identity read is still outstanding, no stored identity has moved, and the
+operator's `watchlists.json` is untouched. Implementation belongs to AM-44, in the order section 6 now records.
+
+Earlier (2026-11-15): AM-40, the defect the first live save-and-reopen exposed: a persisted watchlist
 was on disk and valid but missing from the Saved drop-down. `AutomationMonitorControl` had been answering
 "have I read this environment's lists already?" from a string initialised to the empty value, and a connection
 that reports no environment id (now measured, see `docs/provider-capabilities.md`) uses exactly that value - so
@@ -45,6 +52,7 @@ host:** after that redeploy the saved watchlist is visible in the Saved drop-dow
 stored members with no solution query, so C6's save-reopen-reload acceptance is met on screen. Not reported
 and therefore still open: closing and reopening the plugin tab separately from a host restart, and gate item 4
 (layout at 100/150/200 percent, keyboard navigation) |
+| Environment identity and scope (AM-41 to AM-43) | AM-41 investigated, AM-42 implemented and deployed, **AM-43 designed - documentation only**. No stored identity has changed and no scope value has been written | Core: 571 xUnit tests plus the smoke `PASS` on **Windows 11**, `net48` Release 0W/0E. The identity probe's live read is **not reported**, and none of the designed contract is implemented |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -105,6 +113,15 @@ Windows session records:
    it back, and it carried column names, CLR type names, counts and UTC instants only - no flow id, run id,
    environment name, url or provider message. Item 4 (layout at 100/150/200 percent, keyboard navigation) was not
    reported and stays open.
+8. for the AM-42 connection-identity diagnostic, the same copyable window reached the same way: press the identity
+   action with the intended connection already open and paste back the whole "result" block. It reports presence,
+   identifier **shape** and one same-kind comparison for the connection record's environment id, the already-connected
+   client's environment id and `WhoAmIResponse.OrganizationId`, so it is safe to paste verbatim and cannot leak a
+   value. What is wanted is which of the three is populated and whether the two environment-id sources agree. The
+   build to run is the one deployed on 2026-11-15 (ProductVersion `0.1.0+729f485…`). **Not reported as of this
+   writing, so AM-42's gate stays open.** The AM-43 scope contract does not wait on it: it holds whichever answer
+   comes back, and the answer only decides when AM-44.3 may flip scope derivation. Item 4 stays open for this build
+   too.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -279,12 +296,15 @@ risk and needs its own evidence before any derivation changes.
 | ID | Scope | Host and gate | Status |
 |---|---|---|---|
 | AM-41 | Establish which environment identifiers this host and this SDK really expose, and whether an absent `ConnectionDetail.EnvironmentId` means no identity is reachable at all. | Assembly metadata, the restored NuGet packages, the host's application directory, Microsoft Learn, the connection library's own source; the operator's connection record read for element names only, never values | **Done 2026-11-15 as investigation, documentation only.** An absent `EnvironmentId` element in a *saved* connection does not prove the *running* client cannot supply an environment id; the facts and their limits are in `docs/provider-capabilities.md`. No persisted identity changed on this evidence |
-| AM-42 | Read-only identity probe of the active connection: for each candidate, report presence and shape - never the value. Candidates: `ConnectionDetail.EnvironmentId`, `CrmServiceClient.EnvironmentId` (read from the client the host already connected — never through `ConnectionDetail.ServiceClient`, whose getter can construct a client and start a sign-in), `TenantId`, `OrganizationUrlName`, `OrganizationFriendlyName`, `ConnectionId`, and `WhoAmIResponse.OrganizationId` over the `IOrganizationService` the host already provides. Compare availability and consistency; state whether a Power Platform environment id is actually present at runtime. | Windows gate. It must not write or migrate any settings file, must not alter any `WorkflowKey`, and must not open or create a connection merely to read a property. Output is shape only (populated / kind / length / equality), so no tenant identifier can reach a log, an export or a commit | **Implemented 2026-11-15 as the minimal probe; the runtime gate is still open.** Three sources are measured, not seven: the connection record's environment id, the connector client's environment id read from the service the host already connected, and `WhoAmIResponse.OrganizationId` from one read-only `WhoAmIRequest` on that same service. `TenantId`, `ConnectionId`, `OrganizationUrlName` and `OrganizationFriendlyName` are deliberately not probed - AM-41 settled that none of them can name an environment, so their shape answers no question AM-43 has to ask. The answer is shown in the existing copyable window as presence, identifier shape and one same-kind comparison; the two identity kinds are never compared with each other. 571 Core unit tests, the smoke test and the `net48` Release build are green on Windows 11. No scope, stored member key, settings file or run-history query is touched by it |
-| AM-43 | Multi-environment watchlists: one list holding workflows from several Dataverse environments, using XrmToolBox's multi-connection facilities, with per-environment coverage so one unreachable environment degrades its own source and never discards the others. The document format, how an environment set is represented, and what becomes of today's one-environment-per-list rule are **this checkpoint's design decisions, not AM-41's** | Core unit tests over faked per-environment sources; Windows gate with two environments | Later - blocked behind AM-42 |
-| AM-44 | Give the operator an explicit, verified way to attach a stored identity to a list saved while its scope was empty. Verification is required and the currently connected environment is never assigned automatically, because an empty scope means *unverified*, not "this environment" | Migration tests over a populated legacy file (the real shape is one list of 59 unscoped members) plus the Windows gate | Later - blocked behind AM-42 and AM-43 |
+| AM-42 | Read-only identity probe of the active connection: for each candidate, report presence and shape - never the value. Candidates: `ConnectionDetail.EnvironmentId`, `CrmServiceClient.EnvironmentId` (read from the client the host already connected — never through `ConnectionDetail.ServiceClient`, whose getter can construct a client and start a sign-in), `TenantId`, `OrganizationUrlName`, `OrganizationFriendlyName`, `ConnectionId`, and `WhoAmIResponse.OrganizationId` over the `IOrganizationService` the host already provides. Compare availability and consistency; state whether a Power Platform environment id is actually present at runtime. | Windows gate. It must not write or migrate any settings file, must not alter any `WorkflowKey`, and must not open or create a connection merely to read a property. Output is shape only (populated / kind / length / equality), so no tenant identifier can reach a log, an export or a commit | **Implemented and deployed 2026-11-15 as the minimal probe; the runtime gate (section 3, item 8) is still open - no result has been reported.** Three sources are measured, not seven: the connection record's environment id, the connector client's environment id read from the service the host already connected, and `WhoAmIResponse.OrganizationId` from one read-only `WhoAmIRequest` on that same service. `TenantId`, `ConnectionId`, `OrganizationUrlName` and `OrganizationFriendlyName` are deliberately not probed - AM-41 settled that none of them can name an environment, so their shape answers no question AM-43 has to ask. The answer is shown in the existing copyable window as presence, identifier shape and one same-kind comparison; the two identity kinds are never compared with each other. 571 Core unit tests, the smoke test and the `net48` Release build are green on Windows 11. No scope, stored member key, settings file or run-history query is touched by it |
+| AM-43 | **Design half - done 2026-11-15, documentation only:** the canonical Dataverse resource scope (`dataverse-organization:<canonical-guid>` written into the `scopeId` and `environmentId` fields that already exist), the four states - unverified, recognized, connected, associated - that keep a parseable token from being called proof, the safeguards on attaching an identity to a legacy unscoped list, the rule that an uninterpretable scope is preserved rather than dropped, and the condition on which `schemaVersion` stays 1. **Build half - later:** multi-environment watchlists: one list holding workflows from several Dataverse environments, using XrmToolBox's multi-connection facilities, with per-environment coverage so one unreachable environment degrades its own source and never discards the others | Design: the contract recorded in `docs/provider-capabilities.md` and acceptance criteria AC-25 to AC-31 in `docs/specification.md`; no code, no file, no schema change in this half. Build: Core unit tests over faked per-environment sources; Windows gate with two environments | **Design done 2026-11-15.** Build later, after AM-44.1 to 44.3, and it needs a second environment to prove. Whether one list may hold several organizations, how the Saved list filters such a list, and how it serializes stay **open** decisions of that build, not approved here |
+| AM-44 | Give the operator an explicit, evidence-backed way to attach a recognized identity to a list saved while its scope was empty - and only after that, let derivation produce one. Sequencing approved 2026-11-15: this track lands **before** multi-environment connection management, because all three of its checkpoints are provable with a single environment while AM-43's build is not | See AM-44.1 to 44.3 below | **Planned, not started.** Nothing blocks it but its own order, except AM-44.3, which waits on AM-42's reported answer |
+| AM-44.1 | The identity contract with **no behaviour change**: the scope token grammar and its canonicalisation (a qualified scope must collapse GUID spellings the way `CanonicalId.Identifier` does for workflow ids - `CanonicalId.Text`, applied to the scope today, only trims and lower-cases); a display label resolved without ever keying on a name or url; the parsed scope exposed to `Watchlist` and `RunKey` consumers; a scope this build cannot interpret preserved on save; and the unknown-`provider` member replaced by a refusal to modify rather than a silent skip. **Writes no value: every stored scope stays empty** | xUnit over a populated legacy fixture - grammar, GUID spellings, unknown-scope preservation, unscoped-vs-scoped inequality, label wording - plus the **previous-build round-trip proof** of AC-30 in a scratch `git worktree`: if the older build parses a qualified scope and rewrites or loses it, stop and revisit versioning before anything writes. Core build, whole smoke run, `net48` Release 0W/0E; Windows gate for how the label renders | Later - first |
+| AM-44.2 | The operator action, single-environment: read the connected organization through the read-only seam AM-42 proved, verify the stored member ids with a **completed** read, show a preview that says what changes and what cannot, apply only on explicit confirmation, and move that environment's active selection in the same write. Refuse on partial, unauthorized, unavailable or unresolved evidence, on a list already associated with a different organization, and when the connection reports no organization id. A workflow-id hit is evidence about that id, never proof of where the list came from - a solution import preserves ids - and the 59-member list is never migrated automatically | Migration tests over a populated copy of the real legacy shape, covering AC-25 to AC-29: byte-identical refusal, idempotent re-apply, selection moved atomically, recovery from `watchlists.json.bak`; then the maintainer's own run against that list | Later - after 44.1 |
+| AM-44.3 | Flip derivation so discovery produces qualified scopes, and gate the add-a-flow-to-list path so it can never associate an unverified list (existing same-scope behaviour preserved). Report mixed verified and unverified membership honestly: an unverified stored member is not matched by a scoped read, and must not read as "no longer in the environment" | Reconciliation and de-duplication tests proving no silent re-key of a stored list, then the Windows gate | Later - after 44.2, and it waits on AM-42's reported answer |
 | AM-45 | Independent Azure connection contexts, so a Logic Apps or APIM source is scoped to its own tenant and subscription instead of inheriting the Dataverse connection's identity | Spike, then provider contract tests | Later, with WF-C |
 
-Two rules come out of AM-41 and bind every checkpoint above.
+Five rules come out of AM-41, AM-42 and AM-43 and bind every checkpoint above.
 
 - **A Power Platform environment id and a Dataverse organization id are different identifiers.**
   `WhoAmIResponse.OrganizationId` is the documented source of the organization identity and it is not the
@@ -294,6 +314,18 @@ Two rules come out of AM-41 and bind every checkpoint above.
 - **A connection is not an environment.** `ConnectionId` names one saved connection record, so two records
   for one environment yield two values and re-creating a record yields a new one. Tenant id, friendly name,
   URL name and service URL are context and display, never authoritative resource identity.
+- **A scope that parses is not a scope that is confirmed.** Unverified, recognized, connected and associated are
+  four different claims, and only a completed verification read plus explicit operator confirmation may change
+  stored identity. No wording may call a recognized token verified, and no existence check on a workflow id proves
+  where a list came from - a solution import preserves ids across environments.
+- **Content a build cannot interpret is preserved, not dropped.** A member whose scope text is unknown to the
+  reader survives that build's next save unchanged, or the build refuses to modify that list. The same rule is
+  owed to an unknown `provider` token, which today is skipped on read and so would vanish on the next save.
+- **Association is never automatic.** Adding a flow whose scope is known to a list whose scope is not must not
+  re-key the list; same-scope handling stays as it is, and moving from unverified to a named scope happens only
+  through the confirmed action of AM-44.2. Storing a qualified scope is a change of value inside existing fields and
+  keeps `schemaVersion` 1 **only while the previous build's read-and-write round trip is proven**; no new field may
+  be added under version 1.
 
 ## 6. Sequence, dependencies and what stays paused
 
@@ -317,11 +349,16 @@ Two rules come out of AM-41 and bind every checkpoint above.
    is concluded about the operator's existing unscoped 59-member list until AM-42 measures live values read-only.
    AM-43 carries the mandatory multi-environment watchlist capability and AM-44 the verified, never-automatic
    re-identity of legacy unscoped lists.
-5. WF-F: identity first (AM-42), then multi-environment watchlists (AM-43), then the verified re-identity of
-   legacy unscoped lists (AM-44). AM-42 is implemented and awaits the maintainer's run: it measures the connection
-   record's environment id, the already-connected client's environment id and `WhoAmIResponse.OrganizationId`, and
-   reports shape only. No checkpoint on this track may move a stored `WorkflowKey.ScopeId` before that run has
-   been recorded, because changing scope derivation re-keys every stored member.
+5. WF-F: AM-42 is implemented and awaits the maintainer's run (section 3, item 8) - three identifier sources, shape
+   only. AM-43's **design** half is done and recorded in `docs/provider-capabilities.md`. The implementation order the
+   maintainer approved on 2026-11-15 is AM-44.1 (the scope contract, which writes no value) with its previous-build
+   round-trip proof, then AM-44.2 (the operator-confirmed association), then AM-44.3 (derivation produces qualified
+   scopes and adding a flow never associates a list), and only then AM-43's build - multi-environment membership and
+   query fan-out, which needs a second environment to prove - followed by AM-45's independent Azure contexts. The
+   single-environment identity work therefore precedes multi-environment connection management: every AM-44
+   checkpoint is provable with one environment and AM-43's build is not. No checkpoint may move a stored
+   `WorkflowKey.ScopeId` before the AM-42 run has been recorded and its own gate has passed, because changing scope
+   derivation re-keys every stored member.
 6. WF-D: a dual WPF evaluation, which needs a working discovery path to have real rows to show.
 7. WF-E design direction, then WF-C Azure discovery, which is independent of the UI decision but
    obeys the same spike-before-code rule.
@@ -355,7 +392,10 @@ is not exactly one object.
   name and a friendly name are six different things; only the first two may serve as resource identity, each
   recorded under its own kind and neither written into the other's field. An empty scope means *unverified*:
   it is not a value to match against, and it is never filled in with whatever environment happens to be
-  connected.
+  connected. A stored scope names the **kind** of identifier it holds (`dataverse-organization:<canonical-guid>`
+  today), because two GUIDs of different kinds look identical and mean different things - and a scope that merely
+  parses is *recognized*, never *verified*. Labels for humans come from display context and never from the key;
+  the key never comes from a label.
 
 - Identity never depends on a query flag. A `Distinct` query returns no primary key values (documented
   behaviour, and the cause of the 59 skipped rows on 2026-11-09), so the workflow projection names the
@@ -374,6 +414,19 @@ is not exactly one object.
 - WF-D ends in a recommendation and a measurement, never in a converted view.
 
 ## 8. Explicitly out of scope for this pass
+
+### AM-43 identity and migration design (2026-11-15)
+
+- Documentation only. No `ResourceScope` type, no re-keyed member, no change to any `watchlists.json`, no new UI
+  action, no multi-connection code, no schema change, no new dependency.
+- No scope derivation change and no association code. The token exists in these pages, not in a file: AM-44.1 to
+  44.3 own the first write, and AM-44.1 owns the compatibility proof that decides whether it stays that way.
+- No multi-environment membership, per-scope catalogue filtering or multi-environment serialization decision. The
+  capability stays mandatory and the token makes it expressible; approving the token approves none of that.
+- No further hunt for a Power Platform environment id, no admin-plane call and no new endpoint of any kind.
+- No push, merge, tag, release or deploy, and no CI run read.
+
+### Recorded for the 2026-11-12 discovery pass
 
 - No WF-B to WF-E code. This pass stops at what the live sessions proved: the projection fix, the identity
   the query was discarding, the wording that follows blame, and the diagnostic that makes the next empty

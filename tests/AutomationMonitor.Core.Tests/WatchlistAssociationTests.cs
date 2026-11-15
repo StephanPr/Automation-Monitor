@@ -98,7 +98,24 @@ public class WatchlistAssociationTests
             resolved = 0;
         }
 
-        WorkflowIdentityCounts counts = new WorkflowIdentityCounts(members, members, 0, resolved, 0, 0, 1, 1, members);
+        // A canned refusal must not carry a tally of ids it never got an answer for: "not found" belongs to a
+        // read that finished, and these tests exercise what the planner does with each kind of answer.
+        bool finished = kind == WorkflowIdentityEvidenceKind.Verified
+            || kind == WorkflowIdentityEvidenceKind.PartiallyResolved
+            || kind == WorkflowIdentityEvidenceKind.Unresolved
+            || kind == WorkflowIdentityEvidenceKind.NothingToVerify;
+        WorkflowIdentityCounts counts = new WorkflowIdentityCounts(
+            members,
+            members,
+            0,
+            finished ? members : 0,
+            finished ? members : 0,
+            resolved,
+            0,
+            0,
+            finished ? 1 : 0,
+            finished ? 1 : 0,
+            finished ? members : 0);
         return WorkflowIdentityEvidence.From(
             kind,
             organization ?? Connected,

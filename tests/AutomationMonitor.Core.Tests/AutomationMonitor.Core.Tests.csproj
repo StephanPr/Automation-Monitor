@@ -36,6 +36,26 @@
     -->
     <Compile Include="../../src/AutomationMonitor.Plugin/Storage/DiskSettingsFileAccess.cs" Link="Storage/DiskSettingsFileAccess.cs" />
     <Compile Include="../../src/AutomationMonitor.Plugin/Storage/PluginStorageLocation.cs" Link="Storage/PluginStorageLocation.cs" />
+    <!--
+      Same reasoning for the Dataverse query seam. The workflow-identity read is the one query whose shape is
+      a contract with the platform rather than an implementation detail - a filter value the platform cannot
+      type makes it refuse the whole query - so the assertion has to be made on a real Microsoft.Xrm.Sdk
+      QueryExpression, not on a core fake. These two files reference only the SDK and Core, so linking them
+      compiles the shipped bytes into this assembly and lets a test read back the ConditionExpression the
+      plugin actually builds. The SDK package is a test-time dependency of this project only, pinned to the
+      9.0.2.59 that the plugin already resolves through XrmToolBoxPackage so no second SDK version enters the
+      graph; the plugin keeps getting the host's copy at run time and the distribution allow-list is unchanged.
+      NU1701 is suppressed because Microsoft.CrmSdk.CoreAssemblies ships a net462 asset and nothing newer; that
+      asset was run on this .NET (net10.0) target to prove it executes - QueryExpression, ConditionExpression and
+      DataCollection are plain serialisable types - see docs/provider-capabilities.md.
+    -->
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.59" />
+    <Compile Include="../../src/AutomationMonitor.Plugin/Connectivity/DataverseGateway.cs" Link="Connectivity/DataverseGateway.cs" />
+    <Compile Include="../../src/AutomationMonitor.Plugin/Connectivity/DataverseWorkflowIdentitySource.cs" Link="Connectivity/DataverseWorkflowIdentitySource.cs" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);NU1701;CS1591</NoWarn>
+  </PropertyGroup>
 
 </Project>

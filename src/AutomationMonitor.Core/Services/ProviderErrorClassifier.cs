@@ -79,6 +79,21 @@ namespace AutomationMonitor.Core.Services
         };
 
         /// <summary>
+        /// The platform's words for "a value in your filter is not the type this column takes". Like a
+        /// projected column the table does not have, this is the environment answering a request this build
+        /// wrote badly: it refused the whole query, so no id was read and nothing about membership was
+        /// established. Recorded from the first live workflow-identity read on 2026-11-15: "Condition for
+        /// attribute 'workflow.workflowid': expected argument(s) of type 'System.Guid' but received
+        /// 'System.Guid[]'" - a Guid[] handed to a params object[] filter value. Markers stay lowercase
+        /// because only the haystack is normalised.
+        /// </summary>
+        private static readonly string[] RejectedQueryMarkers =
+        {
+            "expected argument(s) of type",
+            "condition for attribute"
+        };
+
+        /// <summary>
         /// Who caused a failure. The coverage state says what the operator received; this says whether to
         /// blame the environment or this build, and a rejected query must not share one bool with a value
         /// this tool failed to read - the advice an operator needs is different in each case.
@@ -92,7 +107,13 @@ namespace AutomationMonitor.Core.Services
             Mapping,
 
             /// <summary>Dataverse refused this build's query because a projected column does not exist in this environment.</summary>
-            RejectedAttribute
+            RejectedAttribute,
+
+            /// <summary>
+            /// Dataverse refused this build's query because a filter value was not the type the column takes.
+            /// The request never became a read, so every id the read was to ask about is still unanswered.
+            /// </summary>
+            QueryConstruction
         }
 
         /// <summary>
@@ -132,6 +153,15 @@ namespace AutomationMonitor.Core.Services
                 }
             }
 
+            // Same family, different sentence to fix: the columns were right and a filter value was not.
+            foreach (string marker in RejectedQueryMarkers)
+            {
+                if (haystack.IndexOf(marker, StringComparison.Ordinal) >= 0)
+                {
+                    return DefectKind.QueryConstruction;
+                }
+            }
+
             return DefectKind.None;
         }
 
@@ -150,6 +180,17 @@ namespace AutomationMonitor.Core.Services
             // The environment answered this one - it answered "no such column in the query you sent".
             // It is Unsupported (nothing came back) but never Unavailable, whose advice blames the link.
             foreach (string marker in RejectedAttributeMarkers)
+            {
+                if (haystack.IndexOf(marker, StringComparison.Ordinal) >= 0)
+                {
+                    return ProviderResultState.Unsupported;
+                }
+            }
+
+            // And the same for "no such value in the query you sent": answered, refused, nothing read.
+            // Classifying it as Unavailable is what once told an operator the environment had not answered
+            // when the environment had in fact said this build's filter was unusable.
+            foreach (string marker in RejectedQueryMarkers)
             {
                 if (haystack.IndexOf(marker, StringComparison.Ordinal) >= 0)
                 {
@@ -212,6 +253,8 @@ namespace AutomationMonitor.Core.Services
                     return "Automation Monitor could not read a value this environment did return, so the connection and the permissions are not the problem. The column named below is not the shape this build expects; retrying will not help.";
                 case DefectKind.RejectedAttribute:
                     return "Automation Monitor asked this environment for a column its table does not contain, so Dataverse rejected the whole query and no rows were read. The connection and the permissions are not the problem: this build's column list has to be corrected, and retrying will not help.";
+                case DefectKind.QueryConstruction:
+                    return "Automation Monitor sent this environment a query whose filter value was not the type the column takes, so Dataverse rejected the whole query and no workflow id was read at all. The connection and the permissions are not the problem: this build's query has to be corrected, and retrying will not help. Nothing this read reported can be treated as a missing workflow.";
                 default:
                     break;
             }

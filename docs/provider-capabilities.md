@@ -391,12 +391,46 @@ is bounded because it runs against a live tenant on an operator's click:
 | Requests per verification | 12 (so 240 ids maximum) | this tool's; a bigger list is refused before any request |
 | Pages per request | 4, 50 rows per page, 500 rows in total | this tool's; a source that keeps promising pages stops the read and it reports `Incomplete` |
 | Projection | `workflowid` only, `Distinct = false`, ordered by `workflowid` | the platform's rule that a projected column must exist (`primarycategory`) and that a distinct query returns no primary keys (AM-34) |
-| Filter | `ConditionOperator.In` over Guid values | documented operator ("the value exists in a list of values"); no undocumented endpoint |
+| Filter | `ConditionOperator.In` over individually boxed `Guid` values | documented operator ("the value exists in a list of values"); no undocumented endpoint. The boxed-per-id shape is a platform contract, measured live - see below |
 | Messages | `RetrieveMultiple` plus the one already-approved `WhoAmIRequest` | read-only by construction; no other `Execute` message is approved |
 
 Rows become identity through the same `WorkflowIdentity.TryResolve` rule discovery uses, so a row whose projected column
 and row id disagree is counted as unusable rather than guessed, and any row that arrives with an id the read never asked
 about makes the whole answer `Incomplete`: a response that contradicts its own filter is not evidence.
+
+**The `In` filter's argument shape is a platform contract, and the first live run broke it (2026-11-15).** The maintainer's
+first press of *Verify saved list (diagnostic)* returned, for a 59-member list:
+
+> Condition for attribute 'workflow.workflowid': expected argument(s) of type 'System.Guid' but received 'System.Guid[]'.
+
+Measured against the assembly the plugin restores (`Microsoft.Xrm.Sdk` 9.0.0.0, file version 9.0.2.59, `lib/net462`):
+`FilterExpression.AddCondition(String, ConditionOperator, Object[])` is the `params` overload, and a `Guid[]` is **not** an
+`object[]` because value-type arrays are not covariant - so passing the array binds it as *one* value. Reflecting the built
+`ConditionExpression.Values` showed a count of 1 holding a `System.Guid[]` of 2, where the boxed-per-id call yields a count
+of 2 holding two `System.Guid` values. The platform's answer for the nested form is a refusal of the whole query, so no id
+was read and nothing about membership was established - the same failure class as projecting a column the table does not
+have: the environment is answering, and it is answering this build's request. `DataverseWorkflowIdentityQuerySdkTests`
+now asserts the constructed `QueryExpression` itself - operator, one `Guid` per value, no nested collection, the 20/20/19
+split of 59 ids, no query for an empty batch, cancellation, and the page ceiling - against the real SDK types, because no
+core fake can see this mistake.
+
+**What a read that never answered may report.** That first run also mis-reported itself: 59 members were counted as "not
+found" by a query that was refused, and the advice line said the environment had not answered. Both are now prevented by
+construction, because they were the same confusion written twice:
+
+| Claim | What may establish it |
+|---|---|
+| A workflow id exists in this organization | A row carrying it, returned by a completed read that asked for it |
+| A workflow id is **absent** from this organization | A **completed, successful** read that asked for it and did not return it - and nothing else |
+| A workflow id is **unresolved** | Anything that left it unanswered: a refused or failed read, a read that stopped at a ceiling, an id never reached |
+| This list belongs to this organization | Every stored id confirmed by one completed read, plus the operator's confirmation - and applying it is deferred to AM-44.3 |
+
+The counts therefore name five different things rather than two: members considered, ids this read could express as a
+query, ids actually placed in front of the platform, ids a completed read answered for, and ids it confirmed. A refused
+query is classified as a local defect (`DefectKind.QueryConstruction`), which keeps it out of the `Unavailable` wording
+that tells an operator to check a working connection, and the copyable report's "What this proves" line is produced from
+the verdict: a read that never answered states that it proved nothing, and one that stopped part-way claims only the ids
+it actually found.
 
 Ten evidence classes come out of the read, and only `Verified` - a completed read that found every stored member id -
 supports attaching an identity. Partially resolved, unresolved, nothing to verify, incomplete, unauthorized, unavailable,
@@ -415,12 +449,14 @@ add-a-flow scope check - the list would still be on disk and would stop working.
 adding a flow whose scope is a qualified organization, or importing such flows, into a list whose environment was never
 verified is refused (`AssociationRequired`); adopting a *legacy unqualified* scope still behaves as before.
 
-**Not verified by AM-44.2.** The read has never run against a tenant: no agent session connects, so whether a batch
-`In` filter over `workflowid` is accepted and whether the projected column arrives as a `Guid` on the real platform is
-first-hand-untested until the maintainer runs the read-only action and pastes back the copyable block
-(`docs/roadmap.md` section 3, item 9). The Core logic, the ceilings, the classifications and the file behaviour are
-proved by 52 unit tests on both hosts' automation; the plugin compile is proved; loading the button and the answer the
-environment gives are not.
+**Not verified by AM-44.2.** The read has run exactly once against a tenant, on the maintainer's connection, and that run
+found the argument-shape defect recorded above; the corrected build has not been observed yet. No agent session connects,
+so whether the boxed `In` filter is accepted and whether the projected column arrives as a `Guid` on the real platform
+remain first-hand-untested until the maintainer presses the read-only action again and pastes back the copyable block
+(`docs/roadmap.md` section 3, item 9). What *is* proved: the Core logic, the ceilings, the classifications and the file
+behaviour by the unit suite on both hosts' automation; the SDK query shape by tests that execute the real
+`Microsoft.Xrm.Sdk` types; the plugin compile by `net48` Release. What is not: loading the button, and the answer this
+environment gives back.
 
 ### Decided here, and deliberately not
 

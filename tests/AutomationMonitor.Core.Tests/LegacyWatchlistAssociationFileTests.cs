@@ -156,7 +156,8 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
 
     private static WorkflowIdentityEvidence VerifiedEvidence()
     {
-        WorkflowIdentityCounts counts = new WorkflowIdentityCounts(MemberCount, MemberCount, 0, MemberCount, 0, 0, 3, 3, MemberCount);
+        WorkflowIdentityCounts counts = new WorkflowIdentityCounts(
+            MemberCount, MemberCount, 0, MemberCount, MemberCount, MemberCount, 0, 0, 3, 3, MemberCount);
         return WorkflowIdentityEvidence.From(WorkflowIdentityEvidenceKind.Verified, Connected, counts, Stamp);
     }
 

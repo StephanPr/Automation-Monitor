@@ -121,7 +121,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 return WorkflowIdentityEvidence.From(
                     WorkflowIdentityEvidenceKind.NothingToVerify,
                     organization,
-                    new WorkflowIdentityCounts(memberCount, 0, notQueryable, 0, 0, 0, 0, 0, 0),
+                    new WorkflowIdentityCounts(memberCount, 0, notQueryable, 0, 0, 0, 0, 0, 0, 0, 0),
                     checkedAtUtc,
                     memberCount == 0
                         ? "This watchlist has no members, so nothing could confirm it belongs to this organization."
@@ -133,7 +133,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 return WorkflowIdentityEvidence.From(
                     WorkflowIdentityEvidenceKind.Incomplete,
                     organization,
-                    new WorkflowIdentityCounts(memberCount, requested.Count, notQueryable, 0, 0, 0, 0, 0, 0),
+                    new WorkflowIdentityCounts(memberCount, requested.Count, notQueryable, 0, 0, 0, 0, 0, 0, 0, 0),
                     checkedAtUtc,
                     "This list holds more workflow ids than one read may verify (limit "
                         + MaximumVerifiableIds.ToString(CultureInfo.InvariantCulture)
@@ -158,6 +158,8 @@ namespace AutomationMonitor.Core.Providers.Dataverse
         {
             HashSet<string> wanted = new HashSet<string>(requested, StringComparer.OrdinalIgnoreCase);
             HashSet<string> resolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> submitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> answered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int reads = 0;
             int pages = 0;
             int rowCount = 0;
@@ -171,18 +173,47 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 for (int offset = 0; offset < requested.Count; offset += MaximumIdsPerBatch)
                 {
                     List<string> batch = requested.GetRange(offset, Math.Min(MaximumIdsPerBatch, requested.Count - offset));
-                    PagedReadResult<RawWorkflowRecord> read = PageReader.Read(
-                        request =>
-                        {
-                            reads++;
-                            return rows.ReadWorkflowsByIds(batch, request, cancellationToken);
-                        },
-                        RowsPerRequest,
-                        MaximumRows,
-                        MaximumPagesPerBatch,
-                        cancellationToken);
+                    PagedReadResult<RawWorkflowRecord> read;
+                    try
+                    {
+                        read = PageReader.Read(
+                            request =>
+                            {
+                                reads++;
+
+                                // These ids are now in front of the platform. Whether it answers for them is a
+                                // separate fact, and the two only part company when a read fails - which is the
+                                // moment the distinction matters, because an id that was asked about and never
+                                // answered has not been shown to be missing.
+                                foreach (string id in batch)
+                                {
+                                    submitted.Add(id);
+                                }
+
+                                return rows.ReadWorkflowsByIds(batch, request, cancellationToken);
+                            },
+                            RowsPerRequest,
+                            MaximumRows,
+                            MaximumPagesPerBatch,
+                            cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        // The tallies this far are still the truth: what was answered stays answered, and
+                        // everything else - this batch included - stays unresolved rather than missing.
+                        return Failed(
+                            error,
+                            organization,
+                            Counts(memberCount, requested, notQueryable, submitted, answered, resolved, unidentifiable, duplicates, reads, pages, rowCount),
+                            checkedAtUtc);
+                    }
 
                     pages += read.PagesRead;
+                    HashSet<string> foundHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (RawWorkflowRecord row in read.Items)
                     {
                         rowCount++;
@@ -206,17 +237,35 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                         {
                             duplicates++;
                         }
+                        else
+                        {
+                            foundHere.Add(rowId);
+                        }
                     }
 
                     if (!read.IsComplete)
                     {
+                        // A read that stopped mid-window still settled the ids it returned: those exist.
+                        // The rest of the batch was never answered, so they are unresolved - not missing.
+                        foreach (string id in foundHere)
+                        {
+                            answered.Add(id);
+                        }
+
                         stopped = DiagnosticsSanitizer.Describe("Only part of the identity read completed", read.StopReason);
                         break;
                     }
+
+                    // Every page of this batch arrived, so the organization has answered for every id in it:
+                    // the ones that came back exist here, and the ones that did not are absent from it.
+                    foreach (string id in batch)
+                    {
+                        answered.Add(id);
+                    }
                 }
 
-                WorkflowIdentityCounts counts = new WorkflowIdentityCounts(
-                    memberCount, requested.Count, notQueryable, resolved.Count, unidentifiable, duplicates, reads, pages, rowCount);
+                WorkflowIdentityCounts counts = Counts(
+                    memberCount, requested, notQueryable, submitted, answered, resolved, unidentifiable, duplicates, reads, pages, rowCount);
 
                 if (stopped != null)
                 {
@@ -276,10 +325,44 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             }
             catch (Exception error)
             {
-                WorkflowIdentityCounts counts = new WorkflowIdentityCounts(
-                    memberCount, requested.Count, notQueryable, resolved.Count, unidentifiable, duplicates, reads, pages, rowCount);
-                return Failed(error, organization, counts, checkedAtUtc);
+                // Anything the loop itself did not expect still reports the tallies it reached.
+                return Failed(
+                    error,
+                    organization,
+                    Counts(memberCount, requested, notQueryable, submitted, answered, resolved, unidentifiable, duplicates, reads, pages, rowCount),
+                    checkedAtUtc);
             }
+        }
+
+        /// <summary>
+        /// The one place the five different id tallies are assembled, so a read that ended early and a read
+        /// that ran to the end cannot report them in two different ways.
+        /// </summary>
+        private static WorkflowIdentityCounts Counts(
+            int memberCount,
+            List<string> requested,
+            int notQueryable,
+            HashSet<string> submitted,
+            HashSet<string> answered,
+            HashSet<string> resolved,
+            int unidentifiableRows,
+            int duplicateRows,
+            int reads,
+            int pages,
+            int rows)
+        {
+            return new WorkflowIdentityCounts(
+                memberCount,
+                requested.Count,
+                notQueryable,
+                submitted.Count,
+                answered.Count,
+                resolved.Count,
+                unidentifiableRows,
+                duplicateRows,
+                reads,
+                pages,
+                rows);
         }
 
         /// <summary>
@@ -303,8 +386,11 @@ namespace AutomationMonitor.Core.Providers.Dataverse
             {
                 kind = WorkflowIdentityEvidenceKind.Unauthorized;
             }
-            else if (state == ProviderResultState.Unsupported)
+            else if (state == ProviderResultState.Unsupported || defect != ProviderErrorClassifier.DefectKind.None)
             {
+                // A local defect means the environment answered - with a refusal of this build's query, or
+                // with a shape this build could not read. Unavailable would claim the opposite, and its advice
+                // would send the operator to check a connection that is working.
                 kind = WorkflowIdentityEvidenceKind.Unsupported;
             }
             else
@@ -312,7 +398,7 @@ namespace AutomationMonitor.Core.Providers.Dataverse
                 kind = WorkflowIdentityEvidenceKind.Unavailable;
             }
 
-            return WorkflowIdentityEvidence.From(kind, organization, counts, checkedAtUtc, reason, state);
+            return WorkflowIdentityEvidence.From(kind, organization, counts, checkedAtUtc, reason, state, defect);
         }
     }
 }

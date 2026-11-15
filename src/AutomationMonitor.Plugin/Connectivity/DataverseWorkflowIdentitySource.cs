@@ -23,9 +23,11 @@ namespace AutomationMonitor.Plugin.Connectivity
     ///
     /// <para>
     /// The filter uses the documented <see cref="ConditionOperator.In"/> ("the value exists in a list of values")
-    /// over Guid values. Ordering by the primary key makes paging stable, and the batch size and page ceiling are
-    /// the core probe's, not this adapter's, so the bound cannot be widened by whoever wires the next caller.
-    /// Exceptions deliberately propagate: the core classifies them into an honest state.
+    /// over Guid values - one boxed Guid per id, never an array as one value, because the platform refuses the
+    /// whole query when a filter value is not the type the column takes. Ordering by the primary key makes paging
+    /// stable, and the batch size and page ceiling are the core probe's, not this adapter's, so the bound cannot be
+    /// widened by whoever wires the next caller. Exceptions deliberately propagate: the core classifies them into
+    /// an honest state.
     /// </para>
     /// </summary>
     public sealed class DataverseWorkflowIdentitySource : IWorkflowIdentityRowSource
@@ -79,7 +81,22 @@ namespace AutomationMonitor.Plugin.Connectivity
             query.ColumnSet = new ColumnSet(DataverseSchema.WorkflowId);
             query.Distinct = DataverseSchema.WorkflowQueryDistinct;
             query.AddOrder(DataverseSchema.WorkflowId, OrderType.Ascending);
-            query.Criteria.AddCondition(DataverseSchema.WorkflowId, ConditionOperator.In, ids.ToArray());
+
+            // Each id is boxed on its own. AddCondition's third parameter is `params object[]`, and a Guid[]
+            // is not an object[] because value-type arrays are not covariant, so handing it the array binds
+            // the whole array as ONE value: Dataverse then refuses the entire query with
+            // "Condition for attribute 'workflow.workflowid': expected argument(s) of type 'System.Guid' but
+            // received 'System.Guid[]'" - which is what the first live run of this read did on 2026-11-15, and
+            // it answered with no rows at all. A refused query establishes nothing, so the shape of this list
+            // is part of the contract with the platform; DataverseWorkflowIdentityQuerySdkTests asserts it on
+            // the real ConditionExpression.
+            object[] idValues = new object[ids.Count];
+            for (int index = 0; index < ids.Count; index++)
+            {
+                idValues[index] = ids[index];
+            }
+
+            query.Criteria.AddCondition(DataverseSchema.WorkflowId, ConditionOperator.In, idValues);
             DataverseGateway.ApplyPaging(query, request, DataverseWorkflowIdentityProbe.RowsPerRequest);
 
             EntityCollection rows = service.RetrieveMultiple(query);

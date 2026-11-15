@@ -29,15 +29,32 @@ internal sealed class FakeWorkflowIdentitySource : IWorkflowIdentityRowSource
 
     public Exception? Throw { get; set; }
 
+    /// <summary>Fail from this call onward, so a later batch can be the one that refuses while earlier ones answered.</summary>
+    public int ThrowFromCall { get; set; }
+
+    /// <summary>
+    /// What the platform actually answered on 2026-11-15 when this build sent a <c>Guid[]</c> as a single
+    /// filter value. Reproduced here because the honest reporting of a refused query is exactly what the
+    /// evidence tests have to pin down, and no fake of the core's own logic can produce it.
+    /// </summary>
+    public const string RefusedQueryMessage =
+        "Condition for attribute 'workflow.workflowid': expected argument(s) of type 'System.Guid' but received 'System.Guid[]'.";
+
+    public static Exception RefusedQuery()
+    {
+        return new ArgumentException(RefusedQueryMessage, "values");
+    }
+
     public Page<RawWorkflowRecord>? ReadWorkflowsByIds(IReadOnlyList<string> workflowIds, PageRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Calls++;
         Batches.Add(workflowIds);
         Requests.Add(request);
-        if (Throw != null)
+        Exception? failure = Throw ?? (ThrowFromCall > 0 && Calls >= ThrowFromCall ? RefusedQuery() : null);
+        if (failure != null)
         {
-            throw Throw;
+            throw failure;
         }
 
         List<RawWorkflowRecord> rows = new List<RawWorkflowRecord>();

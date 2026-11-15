@@ -27,6 +27,11 @@ namespace AutomationMonitor.Plugin.UI
             // never be mistaken for a step of the discovery the operator is working through.
             ProbeButton = new Button { Text = "Probe run history (diagnostic)", Dock = DockStyle.Left, Width = 216, Height = 26, Enabled = false };
 
+            // The AM-42 measurement: one labelled action that needs no selection, because it asks about the
+            // connection rather than about a flow. Same row as the other diagnostic and same "(diagnostic)"
+            // wording, so neither reads as a step of the discovery the operator is working through.
+            IdentityButton = new Button { Text = "Verify connected identity (diagnostic)", Dock = DockStyle.Left, Width = 226, Height = 26 };
+
             SolutionSelector = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = nameof(SolutionChoice.Label) };
             SearchBox = new TextBox { Dock = DockStyle.Right, Width = 210 };
             Label searchHint = new Label { Text = "Filter:", Dock = DockStyle.Right, Width = 46, TextAlign = ContentAlignment.MiddleRight };
@@ -73,7 +78,7 @@ namespace AutomationMonitor.Plugin.UI
 
             Label probeHint = new Label
             {
-                Text = "Read-only identity check over the selected flow: counts and column shapes only, written to the log.",
+                Text = "Read-only checks on the connection and the selected flow: shapes and counts only, shown in a copyable window.",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true
@@ -81,6 +86,10 @@ namespace AutomationMonitor.Plugin.UI
 
             Panel probeRow = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(8, 2, 8, 4) };
             probeRow.Controls.Add(probeHint);
+
+            // Docked controls are laid out back to front, so the identity button is added before the flow probe
+            // to sit to its right, exactly as the toolbar's numbered steps rely on.
+            probeRow.Controls.Add(IdentityButton);
             probeRow.Controls.Add(ProbeButton);
 
             // The C6 persistence row, kept directly under the discovery steps and never styled as another
@@ -126,6 +135,12 @@ namespace AutomationMonitor.Plugin.UI
 
         /// <summary>The AM-35 diagnostic action, disabled until a flow row is selected.</summary>
         public Button ProbeButton { get; }
+
+        /// <summary>
+        /// The AM-42 measurement of the connected environment's identifiers. Always clickable, because it asks
+        /// about the connection rather than about a flow - the handler is what refuses when nothing is connected.
+        /// </summary>
+        public Button IdentityButton { get; }
 
         // C6 persistence controls: name and save the built watchlist, or open one already saved for this
         // environment. They hold no logic - the host control drives them and Core supplies the wording.
@@ -333,9 +348,9 @@ namespace AutomationMonitor.Plugin.UI
         /// is raised - so the result has to be readable and copyable where the run happened. The text is Core's;
         /// this view only displays it.
         /// </summary>
-        public void ShowProbeReport(string report)
+        public void ShowProbeReport(string report, string? title = null)
         {
-            using (ProbeReportForm form = new ProbeReportForm(report))
+            using (ProbeReportForm form = new ProbeReportForm(report, title))
             {
                 Form? owner = FindForm();
                 if (owner != null)

@@ -36,6 +36,12 @@ namespace AutomationMonitor.Plugin
         /// </summary>
         private const string ProbeSource = "Run-history identity probe";
 
+        /// <summary>
+        /// Label for the AM-42 read. It names identifiers, not environments: the probe reports what the
+        /// connection states, and it never claims the identifier it found is the one a watchlist must be scoped by.
+        /// </summary>
+        private const string IdentitySource = "Connected environment identity";
+
         private readonly DiscoveryView view;
         private readonly IClock clock = new SystemClock();
 
@@ -73,6 +79,7 @@ namespace AutomationMonitor.Plugin
             view.FlowsButton.Click += (sender, args) => ExecuteMethod(LoadCloudFlows);
             view.WatchlistButton.Click += (sender, args) => BuildWatchlist();
             view.ProbeButton.Click += (sender, args) => ExecuteMethod(RunFlowRunProbe);
+            view.IdentityButton.Click += (sender, args) => ExecuteMethod(RunIdentityProbe);
             view.CancelButton.Click += (sender, args) => CancelRunningWork();
             view.SearchBox.TextChanged += (sender, args) => BindSolutionChoices();
             view.SolutionSelector.SelectedIndexChanged += (sender, args) => OnSolutionChanged();
@@ -362,6 +369,81 @@ namespace AutomationMonitor.Plugin
                     LogInfo(report);
                     break;
             }
+        }
+
+        /// <summary>
+        /// AM-42: measure which stable identifiers the active connection actually offers, and show the answer as
+        /// shapes in the same copyable window the run-history probe uses.
+        ///
+        /// <para>
+        /// The read is deliberately small - the connection record's environment id, the already-connected
+        /// client's environment id, and one <c>WhoAmI</c> request - because its only job is to replace an
+        /// assumption with a measurement before any later checkpoint dares to change how a watchlist is scoped.
+        /// It writes nothing: no settings file, no watchlist, no member key. <see cref="Dispose"/> and
+        /// <see cref="CancelRunningWork"/> already stop it, and the window's own text says so.
+        /// </para>
+        /// </summary>
+        private void RunIdentityProbe()
+        {
+            if (Service == null)
+            {
+                view.Say("Connect to a Dataverse environment before verifying its identity.");
+                return;
+            }
+
+            // Built on the UI thread because Service and ConnectionDetail are connection state. The probe is
+            // handed the service the host already connected rather than ConnectionDetail.ServiceClient, whose
+            // getter can construct a client and start a sign-in.
+            DataverseConnectionIdentityProbe probe = new DataverseConnectionIdentityProbe(
+                Service, ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId);
+
+            CancellationToken token = BeginWork();
+            DateTimeOffset checkedAtUtc = clock.UtcNow;
+
+            view.SetBusy(true);
+            view.Say("Reading the connected environment's identifiers (one WhoAmI request; nothing is written)...");
+
+            WorkAsync(new WorkAsyncInfo
+            {
+                Message = "Reading connected environment identity...",
+                IsCancelable = true,
+                Work = (worker, args) => { args.Result = probe.Run(checkedAtUtc, token); },
+                PostWorkCallBack = args =>
+                {
+                    EndWork();
+                    view.SetBusy(false);
+
+                    Exception? error = args.Error;
+                    if (error != null)
+                    {
+                        ReportFailure(error, IdentitySource);
+                        return;
+                    }
+
+                    ConnectedIdentityOutcome? outcome = args.Result as ConnectedIdentityOutcome;
+                    if (outcome == null)
+                    {
+                        view.Say("The identity read returned no result object at all.");
+                        return;
+                    }
+
+                    string report = ConnectedIdentityReport.Build(outcome);
+                    LogProbeResult(outcome.Severity, report);
+                    view.Say(IdentitySummary(outcome));
+                    view.ShowProbeReport(report, "Connected environment identity - result");
+                }
+            });
+        }
+
+        /// <summary>
+        /// The status line: which identifier kinds were obtained and what the one allowed comparison said. The
+        /// full block is in the window, so this line stays one sentence about the connection.
+        /// </summary>
+        private static string IdentitySummary(ConnectedIdentityOutcome outcome)
+        {
+            return "Connected identity - " + ConnectedIdentityEvaluator.VerdictFor(outcome)
+                + ". The two environment-id sources hold " + IdentityComparison.Describe(outcome.EnvironmentIdMatch)
+                + ". Full result: the identity window that just opened, with a Copy all button.";
         }
 
         private void BindSolutionChoices()

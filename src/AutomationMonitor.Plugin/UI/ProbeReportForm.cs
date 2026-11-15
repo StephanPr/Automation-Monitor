@@ -26,7 +26,7 @@ namespace AutomationMonitor.Plugin.UI
         private readonly Label _hint;
         private readonly Font _mono;
 
-        public ProbeReportForm(string report)
+        public ProbeReportForm(string report, string? title = null)
         {
             _mono = new Font(FontFamily.GenericMonospace, 9.25f);
 
@@ -91,7 +91,11 @@ namespace AutomationMonitor.Plugin.UI
             Controls.Add(body);
             Controls.Add(footer);
 
-            Text = "Run-history identity probe - result";
+            // The title names which diagnostic ran, so two blocks from two different probes cannot be pasted
+            // back as if they were the same experiment. The default stays the run-history probe's wording.
+            Text = string.IsNullOrWhiteSpace(title)
+                ? "Run-history identity probe - result"
+                : title!.Trim();
             Font = SystemFonts.MessageBoxFont;
             ClientSize = new Size(920, 560);
             MinimumSize = new Size(560, 320);

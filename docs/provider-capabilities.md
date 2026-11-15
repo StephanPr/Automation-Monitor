@@ -185,6 +185,9 @@ heap); versions by reading the deployed and restored binaries themselves.
 | `WhoAmIResponse` returns `OrganizationId`, `BusinessUnitId` and `UserId` — and **no** environment id | Microsoft Learn, `WhoAmIResponse` properties; these types ship in `Microsoft.Crm.Sdk.Proxy.dll` |
 | The deployed `Microsoft.Xrm.Tooling.Connector.dll` is ProductVersion `4.0.0.188+gf6ab2d7` and carries `get_EnvironmentId`; the restored `Microsoft.CrmSdk.XrmTooling.CoreAssembly` 9.1.1.65 is the **same** ProductVersion, and it reaches the plugin transitively through `XrmToolBoxPackage` 1.2025.10.74 — so the property is compilable against and present at runtime with no new dependency | Binary `VersionInfo` and metadata scan of both copies; `obj/project.assets.json` |
 | The deployed `Microsoft.Crm.Sdk.Proxy.dll` is ProductVersion `9.2.49.14828` | Binary `VersionInfo` |
+| **`ConnectionDetail.ServiceClient` is not a safe read.** Its getter is `GetCrmServiceClient()`: it returns the cached client *only* when one already exists, and otherwise constructs a `CrmServiceClient` from the stored connection string or runs the online / IFD / on-premises / OAuth / client-secret / key-vault connect path — and it throws outright for connections made through the SDK login control. Reading a property can therefore start a sign-in, open a second connection, or raise | `McTools.Xrm.Connection` `ConnectionDetail.cs` (master, read in full 2026-11-15): property L450-452; method L560-633, cached-client fast path L562 and L576, throw L583, construction L588-626, `IsReady` check L628-633 |
+| The connector's environment id is therefore read from the service **the host already connected**, by type test (`Service as CrmServiceClient`), never from `ConnectionDetail.ServiceClient`. When that service is not a connector client, AM-42 reports the source as *not read by this build* rather than as blank | `XrmToolBox.Extensibility` `PluginControlBase.cs`: `public IOrganizationService Service { get; private set; }`, assigned by `UpdateConnection(IOrganizationService newService, …)`; `DataverseConnectionIdentityProbe` |
+| `ConnectionDetail.EnvironmentId` is a plain auto-property (`public string EnvironmentId { get; set; }`) and safe to read, but the connection library fills it only on the code path that builds a client — not on the paths that hand back an already-cached one. That is one reason a *live* read can legitimately differ from what the saved record holds | `ConnectionDetail.cs` L243 (declaration), L644 (`EnvironmentId = crmSvc.EnvironmentId;`), contrasted with the early returns at L562-566 and L574-581 |
 | The operator's saved connection record carries **no `EnvironmentId` element at all**, while `TenantId`, `Organization`, `OrganizationFriendlyName`, `OrganizationUrlName`, `OrganizationServiceUrl`, `OrganizationDataServiceUrl`, `OrganizationVersion`, `OriginalUrl`, `WebApplicationUrl`, `ServerName` and `ConnectionId` are present | Element names of `Connections\ConnectionsList.Default.xml`, read for names and emptiness only. No connection value was read, copied or recorded, and the file was not modified |
 | That one empty value drives the whole identity chain, which is why discovery reads `unknown environment`: `ConnectionDetail.EnvironmentId` → `DataverseGateway.EnvironmentId` → `DataverseSolutionFlowSource` → `DataverseCloudFlowSelector.Select(…, environmentId)` → `WorkflowKey.TryCreate(PowerAutomate, environmentId, id)` → `WorkflowReference.EnvironmentId`, which **is** `Key.ScopeId` | Read of the call path; AM-40's file audit proved the stored consequence |
 
@@ -215,19 +218,25 @@ therefore stays byte-for-byte as it is, and its empty scope stays *unverified* r
 globally valid or as a match for the currently connected environment.
 
 AM-42 answers the open questions read-only (see `docs/roadmap.md` section 5.7): what each candidate reports on
-the **active** connection, whether `CrmServiceClient.EnvironmentId` is populated at runtime, whether it agrees
-with `WhoAmIResponse.OrganizationId`, and whether the two ever conflict. Multi-environment watchlists are a
-required later capability and are specified in `docs/specification.md`; their storage format, schema version
-and migration shape are deliberately **not** decided by this investigation.
+the **active** connection, whether `CrmServiceClient.EnvironmentId` is populated at runtime, and whether the two
+environment-id sources agree with each other. It was implemented on 2026-11-15 as one labelled diagnostic action
+that reports presence, identifier shape and that one comparison — and *nothing else*, because every type it
+returns is incapable of holding a value. **Its result is not recorded yet**: it needs the maintainer's own
+XrmToolBox session, and no agent connects to an environment. Multi-environment watchlists are a required later
+capability and are specified in `docs/specification.md`; their storage format, schema version and migration shape
+are deliberately **not** decided by this investigation, and AM-42 changes no scope, no stored key and no file.
+
+The organization id and the environment id are deliberately **not** compared with each other. They are different
+identity kinds, and a line reading "these two differ" would look like a defect instead of a definition.
 
 ### Not verified by AM-41
 
-- Whether `ConnectionDetail.ServiceClient` hands back an already-connected client or builds one. A plugin must
-  never start a sign-in or open a second connection merely to read a property; the connection library's
-  `ConnectionDetail.cs` fetch truncated mid-file, so its lazy-initialisation behaviour is unconfirmed and must
-  be read before that property is touched.
-- Whether `CrmServiceClient.EnvironmentId` is populated for this connection type, or whether it agrees with
-  anything else. No identifier value was observed, recorded or compared by this investigation.
+- ~~Whether `ConnectionDetail.ServiceClient` hands back an already-connected client or builds one.~~ **Answered
+  at source level on 2026-11-15: it builds one when no client is cached, which can authenticate or throw. The
+  probe therefore never reads that property; see the recorded-facts table above.**
+- Whether `CrmServiceClient.EnvironmentId` is populated for this connection type, or whether it agrees with the
+  connection record's own value. No identifier value was observed, recorded or compared by any investigation on
+  this host, and none will be: the AM-42 window reports shape only. This is what the maintainer's run answers.
 - Whether the Dataverse `organization` table exposes an environment id column. Learn's `organization`
   reference exceeds the fetch limit (287 KB, truncated at 50 KB) so it was not verified — and a wrong column
   name makes `RetrieveMultiple` refuse the **whole** query (the `primarycategory` class), so it may only be

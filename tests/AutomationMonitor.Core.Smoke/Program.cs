@@ -153,3 +153,48 @@ if (summary.TotalRuns != 3 || summary.Succeeded != 1 || summary.Failed != 1 || s
 Console.WriteLine("PASS: run history model, normalization, merge and correlation smoke test");
 
 
+
+// 10. AM-42: connected environment identity is measured as shape, never as a value, and the two identity
+//     kinds are never compared with each other.
+const string ConnectionEnvId = "77777777-7777-7777-7777-777777777777";
+const string OrgId = "88888888-8888-8888-8888-888888888888";
+
+IdentityObservation observed = IdentityObservation.Observe(IdentityKind.PowerPlatformEnvironmentId, "smoke", ConnectionEnvId);
+if (observed.Availability != IdentityAvailability.Present || !observed.IsUsable || observed.CharacterCount != 36)
+{
+    throw new Exception("A present identifier must be reported by its shape: " + observed.Describe());
+}
+
+if (IdentityObservation.Observe(IdentityKind.PowerPlatformEnvironmentId, "smoke", null).Availability != IdentityAvailability.Missing
+    || IdentityObservation.Observe(IdentityKind.PowerPlatformEnvironmentId, "smoke", "not-an-id").Availability != IdentityAvailability.Invalid
+    || IdentityObservation.Observe(IdentityKind.PowerPlatformEnvironmentId, "smoke", ConnectionEnvId, reachable: false).Availability != IdentityAvailability.Unavailable)
+{
+    throw new Exception("Blank, unparseable and unreachable must stay three different answers.");
+}
+
+IdentityObservation organization = IdentityObservation.Observe(IdentityKind.DataverseOrganizationId, "smoke", ConnectionEnvId);
+if (IdentityComparison.Evaluate(observed, organization, true) != IdentityMatch.NotComparable)
+{
+    throw new Exception("An organization id and an environment id are different kinds and must never be compared, whatever their values.");
+}
+
+ConnectedIdentityOutcome identity = ConnectedIdentityEvaluator.Evaluate(
+    ConnectionEnvId, "{" + ConnectionEnvId + "}", true, OrgId, true, null, null,
+    new DateTimeOffset(2026, 11, 15, 9, 30, 0, TimeSpan.Zero));
+
+string identityReport = ConnectedIdentityReport.Build(identity);
+if (identity.EnvironmentIdMatch != IdentityMatch.Same
+    || identityReport.Contains(ConnectionEnvId, StringComparison.Ordinal)
+    || identityReport.Contains(OrgId, StringComparison.Ordinal)
+    || identityReport.Contains("77777777", StringComparison.Ordinal))
+{
+    throw new Exception("The identity report missed the comparison or carried an identifier.");
+}
+
+if (identityReport.IndexOf("never treated as equal", StringComparison.Ordinal) < 0)
+{
+    throw new Exception("Every identity report must say that the two kinds were not compared with each other.");
+}
+
+Console.WriteLine("PASS: connected environment identity is shape-only, kind-safe and free of identifiers");
+

@@ -7,8 +7,19 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-15 - **AM-42's live identity read has been reported, and AM-44.1 is implemented.** The
-contract.** The maintainer ran the connection-identity diagnostic on the build deployed on 2026-11-15
+Last updated: 2026-11-15 - **AM-44.2's first live run failed, the defect is fixed, and the gate is ready to re-run.**
+The maintainer pressed *Verify saved list (diagnostic)* on the build deployed at 15:53 and Dataverse refused the query:
+`Condition for attribute 'workflow.workflowid': expected argument(s) of type 'System.Guid' but received 'System.Guid[]'`.
+The cause was this build's own filter construction - `Guid[]` handed to a `params object[]` parameter arrives as one
+nested value, not as twenty ids - and the report then compounded it by counting all 59 members as "not found" and blaming
+the environment for not answering. Both are corrected: the filter now boxes one `Guid` per id and a new suite asserts the
+constructed `Microsoft.Xrm.Sdk` query rather than a core fake, and a read that never answered can now only report
+unresolved ids - "not found" belongs exclusively to a completed successful read, and the "What this proves" line is
+derived from the verdict instead of asserted. `docs/provider-capabilities.md` carries the measured facts. Applying an
+association stays gated off for AM-44.3, which is still unstarted.
+
+Earlier (2026-11-15): **AM-42's live identity read has been reported, and AM-44.1 is implemented.** The maintainer ran
+the connection-identity diagnostic on the build deployed on 2026-11-15
 (ProductVersion `0.1.0+729f485…`) and pasted back the whole result block at 11:06:15 UTC. What it reported: the
 connection record's `EnvironmentId` stated nothing, the already-connected client's `EnvironmentId` stated nothing
 either, `WhoAmIRequest` succeeded, and `WhoAmIResponse.OrganizationId` was present with a valid GUID shape - so the
@@ -83,7 +94,7 @@ host:** after that redeploy the saved watchlist is visible in the Saved drop-dow
 stored members with no solution query, so C6's save-reopen-reload acceptance is met on screen. Not reported
 and therefore still open: closing and reopening the plugin tab separately from a host restart, and gate item 4
 (layout at 100/150/200 percent, keyboard navigation) |
-| Environment identity and scope (AM-41 to AM-44) | AM-41 investigated, AM-42 implemented, deployed **and reported by the maintainer**, AM-43 designed, **AM-44.1 and AM-44.2 implemented**, AM-44.2 **deployed 2026-11-15 15:53** (the scope contract, the read-loss refusal, the verification read and the association preview, with applying an association gated off). No stored identity has moved | Core xUnit suite plus the smoke `PASS` on **Windows 11**, `net48` Release 0W/0E. The identity read's runtime gate (section 3, item 8) is **closed for this connection**: neither environment-id source stated an identifier, `WhoAmIRequest` succeeded and `WhoAmIResponse.OrganizationId` arrived with a valid GUID shape. The saved-list gate (section 3, item 9) is **open**: the build is deployed and the operator's file is proven unchanged across that deployment, but the observation is still owed |
+| Environment identity and scope (AM-41 to AM-44) | AM-41 investigated, AM-42 implemented, deployed **and reported by the maintainer**, AM-43 designed, **AM-44.1 and AM-44.2 implemented**, AM-44.2 **deployed, run live once, found two defects and fixed (2026-11-15)** - the scope contract, the read-loss refusal, the verification read and the association preview, with applying an association still gated off. No stored identity has moved | Core xUnit suite plus the smoke `PASS` on **Windows 11**, `net48` Release 0W/0E. The identity read's runtime gate (section 3, item 8) is **closed for this connection**: neither environment-id source stated an identifier, `WhoAmIRequest` succeeded and `WhoAmIResponse.OrganizationId` arrived with a valid GUID shape. The saved-list gate (section 3, item 9) is **open and re-run ready**: the first live attempt proved the query-shape defect (a `Guid[]` as one `In` value, which the platform refuses) and the reporting defect (a refused query counted 59 members as "not found" and blamed the connection); both are now covered by tests that build the real `Microsoft.Xrm.Sdk` query, and the corrected build is what the maintainer re-runs |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -164,26 +175,39 @@ Windows session records:
    concluded about by this single observation.
 9. for the AM-44.2 saved-list check, the same copyable window: pick a saved watchlist in the **Saved** box, press
    "Verify saved list (diagnostic)" and paste back the whole block. It carries the connected organization as a
-   fingerprint, the verdict of the bounded identity read, the counts (members considered, ids asked about, found, not
-   found, rows with no usable id, reads / pages / rows) and the association preview with its decision - by construction
-   no workflow id, no organization value, no flow name and no provider message, so it is safe to paste verbatim. What
-   is wanted: how many stored ids the organization confirmed, and that the decision line reads
+   fingerprint, the verdict of the bounded identity read, the counts (members considered, ids it could ask about, ids put
+   in a query, found, not found *among those answered*, unanswered, rows with no usable id, reads / pages / rows), what
+   the read proves and does not prove, and the association preview with its decision - by construction no workflow id, no
+   organization value, no flow name and no provider message, so it is safe to paste verbatim. What is wanted: how many
+   stored ids the organization confirmed, and that the decision line reads
    `DEFERRED ... AM-44.3` on this build (a `REFUSED` line is also a correct answer and names its blocker). The action
    writes nothing and the plugin offers no way to apply the association yet, so the file must be unchanged afterwards;
    report too where the third diagnostic button sits at 100 / 150 / 200 percent scaling and whether Tab reaches it in
    row order, which is item 4 for this build.
-   **Deployed for this gate on 2026-11-15 15:53 and NOT yet satisfied.** The build is ProductVersion
-   `0.1.0+5503270…` (commit `5503270`, Release 0W/0E on Windows 11 after 684 unit tests and both smoke `PASS` lines),
-   installed by `scripts\deploy.ps1` into `C:\Users\Stephan\Desktop\XrmToolBox` with storage root
-   `%APPDATA%\MscrmTools\XrmToolBox` while no `XrmToolBox*` process was running; the replaced copies went to
-   `PluginBackups\AutomationMonitor\20261115-155339`. `Plugins\AutomationMonitor.Plugin.dll` 67584 B sha256
-   `B446776B…` and `Plugins\AutomationMonitor.Core.dll` 230912 B sha256 `43F66E32…` are byte-identical to the build
-   output, and the operator's `watchlists.json` re-hashed afterwards as `28114FEA…` (22899 B, modification time
-   unchanged) with no `.bak`, `.new` or quarantined file appearing beside it. The deployed assemblies carry the action
-   (`Verify saved list (diagnostic)`, `DataverseWorkflowIdentitySource`, `VerifySavedList`), and the deployed Core
-   answers `Shipped.CanReassignStoredScopes = False` with `RequiredCheckpoint = AM-44.3` when it is read back by
-   reflection. **What is still owed is only the maintainer's observation**: the counts the environment returned, the
-   decision line, where the third diagnostic button sits at 100 / 150 / 200 percent, and whether Tab reaches it.
+   **First attempt on 2026-11-15 16:10 failed, and the failure is the reason this gate exists.** On the
+   `0.1.0+5503270…` build the operator's 59-member list answered: 59 members considered, 59 asked about, 0 found,
+   **59 not found**, `unavailable` with the advice "The environment did not answer. Check the connection and try again",
+   and the window still asserted "these workflow ids exist in the organization named above". The connection was not the
+   problem: Dataverse had refused this build's query because the id list reached it as one `Guid[]` value instead of 20
+   `Guid` values (`expected argument(s) of type 'System.Guid' but received 'System.Guid[]'`), and a refused query had
+   been reported as an answer about the operator's data. Both halves are fixed on the rebuilt deployment; nothing in the
+   operator's file moved at any point, before or after that run.
+   **Redeployed for this gate on 2026-11-15 and NOT yet satisfied.** The build is ProductVersion
+   `0.1.0+3c02a74966b57e09f50dd3731acfac9894d9132f` (`3c02a74`, the AM-44.2a fix commit; Release 0W/0E on
+   Windows 11 after 705 unit tests and both smoke `PASS` lines), installed by `scripts\deploy.ps1` into
+   `C:\Users\Stephan\Desktop\XrmToolBox` with storage root `%APPDATA%\MscrmTools\XrmToolBox` while no
+   `XrmToolBox*` process was running. The two deployed files are SHA-256 identical to the Release output
+   (`AutomationMonitor.Plugin.dll` 67584 B `A32B6D3A...`, `AutomationMonitor.Core.dll` 234496 B `D6D91B7A...`), both
+   reporting that ProductVersion, and `Plugins\` holds exactly those two names. The replaced copies went to
+   `PluginBackups\AutomationMonitor\20261115-173501\`. The first attempt that afternoon hit a file lock on the
+   previous `AutomationMonitor.Core.dll` - held by a stale shell, not by the host - and the installer rolled itself
+   back, which makes `20261115-170909\` the second in-field proof that a half-finished install leaves no mixed
+   deployment behind. `Settings\AutomationMonitor\watchlists.json` read `28114FEA...`, 22899 B, mtime
+   2026-11-15 10:45:39.449 before and after both attempts: untouched.
+   **What is owed now is only the maintainer's re-run on the existing
+   59-member list**: the counts the environment returns, the verdict, the `DEFERRED ... AM-44.3` decision line, the
+   confirmation that `watchlists.json` is unchanged, and where the third diagnostic button sits at 100 / 150 / 200
+   percent with Tab reaching it in row order.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -434,7 +458,10 @@ two environments to measure; AM-44.3 no longer waits on AM-42, whose identity re
    (the scope contract, which writes no value) is implemented with its previous-build round-trip proof passed, and
    AM-44.2 (the verification read, the evidence classes and the operator-confirmed association) is implemented with
    **applying it deferred** - `ScopeResolutionSupport.Shipped` refuses to re-key a stored list, because this build
-   cannot yet resolve a qualified scope when it loads and matches watchlists. The order the maintainer approved on
+   cannot yet resolve a qualified scope when it loads and matches watchlists. AM-44.2's first live run on 2026-11-15
+   failed on its own query construction and mis-reported that failure as an answer about the operator's data; that
+   fix (AM-44.2a) changed no contract in the list below and leaves the same deferral and the same order in place.
+   The order the maintainer approved on
    2026-11-15 therefore continues with AM-44.3, the only checkpoint allowed to lift that deferral: derivation produces
    qualified scopes, the saved-watchlist path resolves and matches them, a friendly environment label appears as
    presentation, and adding a flow still never associates a list. Only then AM-43's build - multi-environment membership and

@@ -472,11 +472,13 @@ organization is never added to a list that names another - such a member stays v
 removed. Adopting a *legacy unqualified* scope still behaves as before. What a new save does write is the scope that
 save resolved; what an existing list keeps is exactly what it had, including nothing.
 
-**Not verified by AM-44.2.** The read has run exactly once against a tenant, on the maintainer's connection, and that run
-found the argument-shape defect recorded above; the corrected build has not been observed yet. No agent session connects,
-so whether the boxed `In` filter is accepted and whether the projected column arrives as a `Guid` on the real platform
-remain first-hand-untested until the maintainer presses the read-only action again and pastes back the copyable block
-(`docs/roadmap.md` section 3, item 9). What *is* proved: the Core logic, the ceilings, the classifications and the file
+**Answered against a tenant on 2026-11-15, by the maintainer.** The read has now run twice on that connection: the
+first run found the argument-shape defect recorded above, and the re-run on the corrected build confirmed the fix -
+59 members considered, 59 confirmed, 0 missing and 0 unresolved over 3 reads, 3 pages and 59 rows, verdict `Verified`
+with the association still `Deferred`, and the saved file unmodified. So a boxed `In` filter is accepted by a real
+environment and the projected identity column arrives in a form this build can read. Still unobserved: item 4 for that
+build (the third diagnostic button at 100 / 150 / 200 percent and its Tab order) and the whole AM-44.3a checklist,
+`docs/roadmap.md` section 3, item 10. No agent session connects to any environment. What *is* proved: the Core logic, the ceilings, the classifications and the file
 behaviour by the unit suite on both hosts' automation; the SDK query shape by tests that execute the real
 `Microsoft.Xrm.Sdk` types; the plugin compile by `net48` Release. What is not: loading the button, and the answer this
 environment gives back.

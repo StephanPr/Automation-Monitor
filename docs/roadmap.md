@@ -66,9 +66,11 @@ neither adding a flow nor importing a solution can attach a qualified scope to a
 under `%TEMP%` and the operator's `watchlists.json` is untouched. **AM-44.2 is deployed on the primary host**
 (2026-11-15 15:53, ProductVersion `0.1.0+5503270…`, host closed, previous copies kept in
 `PluginBackups\AutomationMonitor\20261115-155339`); the operator's `watchlists.json` re-hashed byte-identical
-afterwards (`28114FEA…`, 22899 bytes, modification time unchanged). Section 3 item 9 stays **open** until the
-maintainer reports the saved-list check on that build; no AM-44.3 code was written to produce that deployment.
-AM-44.3a has landed since and changes nothing in what that deployment does - its own gate is item 10 below.
+afterwards (`28114FEA…`, 22899 bytes, modification time unchanged). Section 3 item 9 was **open** at that point,
+pending the maintainer's saved-list check on that build; no AM-44.3 code was written to produce that deployment.
+Section 3 item 9 was closed later the same day by the maintainer's re-run on the corrected `3c02a74` build (59 of 59
+confirmed, verdict `Verified`, association deferred, file untouched). AM-44.3a has landed since and changes nothing in
+what that deployment does - its own gate is item 10 below.
 
 Earlier (2026-11-15): **AM-43 recorded as a design decision, documentation only.** The canonical Dataverse
 resource scope, the four identity states that keep "recognized", "connected" and "associated" apart, the safeguards on
@@ -225,10 +227,14 @@ Windows session records:
    back, which makes `20261115-170909\` the second in-field proof that a half-finished install leaves no mixed
    deployment behind. `Settings\AutomationMonitor\watchlists.json` read `28114FEA...`, 22899 B, mtime
    2026-11-15 10:45:39.449 before and after both attempts: untouched.
-   **What is owed now is only the maintainer's re-run on the existing
-   59-member list**: the counts the environment returns, the verdict, the `DEFERRED ... AM-44.3` decision line, the
-   confirmation that `watchlists.json` is unchanged, and where the third diagnostic button sits at 100 / 150 / 200
-   percent with Tab reaching it in row order.
+   **Satisfied on 2026-11-15 by the maintainer's re-run against the existing 59-member list on this `3c02a74`
+   build**: 59 members considered, 59 confirmed by the organization, **0 missing and 0 unresolved**, over 3 reads, 3
+   pages and 59 rows, verdict `Verified`, and the decision line read `Deferred` naming AM-44.3 - so the boxed-`Guid`
+   `In` filter is accepted by a real environment and the projected identity column arrives in a form this build can
+   read. That is the first answer AM-44 has had from live data rather than from a fake, and `watchlists.json` was
+   unmodified afterwards, with no way offered to apply the association - both as intended. What that run did not
+   report is item 4 for this build (where the third diagnostic button sits at 100 / 150 / 200 percent and whether Tab
+   reaches it in row order); it stays open and is folded into item 10 below.
 10. for AM-44.3a (organization-qualified discovery, with no stored identity moved), on the intended connection:
    (a) report the `ProductVersion` the deployed DLL reports and the `Environment:` sentence the discovery status line
    shows after a flow read - it either names the connected organization beside its fingerprint, or reads
@@ -249,6 +255,17 @@ Windows session records:
    labels and the three diagnostic buttons sit at 100 / 150 / 200 percent scaling, and whether Tab reaches them in row
    order. Quote the plugin's own label text back, never the value beside it: no environment name, URL, tenant or
    organization value, flow name, run id or provider message belongs in the report.
+   **Deployed for this gate on 2026-11-15 and NOT yet satisfied.** ProductVersion
+   `0.1.0+dcdf38a879078783286aeb482be6e73eb21140fd` (`dcdf38a`, the AM-44.3a commit; Release 0 warning / 0 error on
+   Windows 11 after 736 unit tests, both smoke `PASS` lines and the `b318416` previous-build compatibility run),
+   installed by `scripts\deploy.ps1` into `C:\Users\Stephan\Desktop\XrmToolBox` with storage root
+   `%APPDATA%\MscrmTools\XrmToolBox` while no `XrmToolBox*` process was running. The two deployed files are SHA-256
+   identical to the Release output (`AutomationMonitor.Plugin.dll` 75776 B `DA903FD7…`,
+   `AutomationMonitor.Core.dll` 243200 B `B2D951E8…`), both report that ProductVersion, neither carries a
+   Zone.Identifier, and `Plugins\` holds exactly those two Automation Monitor names. The replaced copies went to
+   `PluginBackups\AutomationMonitor\20261115-200442\`. `Settings\AutomationMonitor\watchlists.json` read `28114FEA…`,
+   22899 B, mtime 2026-11-15 10:45:39.449 before and after the install: untouched. No agent session connected to an
+   environment to produce that deployment, and none will run steps (a) to (f).
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 

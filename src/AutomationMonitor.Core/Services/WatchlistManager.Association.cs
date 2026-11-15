@@ -26,7 +26,15 @@ namespace AutomationMonitor.Core.Services
         /// Apply the association the operator confirmed.
         ///
         /// <para>
-        /// The plan is rebuilt from the live catalog and the confirmed preview's own evidence, then compared to
+        /// <paramref name="connectedScope"/> is the scope the caller's connection resolves <em>right now</em>,
+        /// asked for rather than assumed because only the host knows it. The preview the operator read names the
+        /// organization a completed identity read established; if the connection no longer names that resource -
+        /// it was switched, it closed, or it never resolved - applying would re-key the operator's list to an
+        /// environment nobody verified it against. That is a refusal, before anything is compared or written.
+        /// </para>
+        ///
+        /// <para>
+        /// The plan is then rebuilt from the live catalog and the confirmed preview's own evidence, and compared to
         /// what was shown: an edit, a reload or a second read between preview and confirmation makes the two
         /// differ, and that is a refusal rather than a best-effort guess. When it does apply, the list, its
         /// member keys and that environment's active-list selection move together in one mutation, so there is
@@ -36,6 +44,7 @@ namespace AutomationMonitor.Core.Services
         public WatchlistOperationResult AssociateScope(
             string? id,
             WatchlistAssociationPreview? confirmed,
+            string? connectedScope,
             DateTimeOffset? expectedModifiedAtUtc = null)
         {
             Watchlist? current = FindRequired(id, out WatchlistOperationResult? failure);
@@ -48,6 +57,12 @@ namespace AutomationMonitor.Core.Services
             if (stale != null)
             {
                 return stale;
+            }
+
+            WatchlistOperationResult? disconnected = CheckConnectedScope(current, confirmed, connectedScope);
+            if (disconnected != null)
+            {
+                return disconnected;
             }
 
             WorkflowIdentityEvidence? evidence = confirmed == null ? null : confirmed.Evidence;
@@ -97,6 +112,48 @@ namespace AutomationMonitor.Core.Services
                 : new string[] { "verified by the read of " + evidence.CheckedAtUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture) };
 
             return Commit(next, associated, "associated with " + ResourceScopeLabel.Describe(plan.TargetScope), notes);
+        }
+
+        /// <summary>
+        /// The connection-context check an association cannot do without. A preview is evidence about one
+        /// organization at one instant; the caller's scope is what the connection says now. Both must name the
+        /// same resource, or the confirmation the operator gave is not a confirmation of the change in front of
+        /// them. A preview with no qualified target cannot be applied at all, so the planner's own refusals
+        /// cover that case and there is nothing to compare here.
+        /// </summary>
+        private WatchlistOperationResult? CheckConnectedScope(
+            Watchlist current,
+            WatchlistAssociationPreview? confirmed,
+            string? connectedScope)
+        {
+            if (confirmed == null || !confirmed.TargetScope.IsQualified)
+            {
+                return null;
+            }
+
+            ResourceScope connected = ResourceScope.Read(connectedScope);
+            if (!connected.IsQualified)
+            {
+                return WatchlistOperationResult.Refused(
+                    WatchlistOperationOutcome.AssociationRefused,
+                    _catalog,
+                    current,
+                    "this connection no longer names a verified organization, so nothing could be associated with it - reconnect,"
+                        + " check the saved list again and confirm the preview that read shows");
+            }
+
+            if (connected.IsSameResourceAs(confirmed.TargetScope))
+            {
+                return null;
+            }
+
+            return WatchlistOperationResult.Refused(
+                WatchlistOperationOutcome.AssociationRefused,
+                _catalog,
+                current,
+                "the connection now names " + ResourceScopeLabel.Describe(connected) + ", but the preview was checked against "
+                    + ResourceScopeLabel.Describe(confirmed.TargetScope) + " - nothing was changed. Run the check against the"
+                    + " environment you mean and confirm that one");
         }
 
         /// <summary>

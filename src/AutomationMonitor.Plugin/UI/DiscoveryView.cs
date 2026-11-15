@@ -36,6 +36,18 @@ namespace AutomationMonitor.Plugin.UI
             // preview, shown and never applied by this button. Enabled only when a saved list is picked.
             AssociateButton = new Button { Text = "Verify saved list (diagnostic)", Dock = DockStyle.Left, Width = 226, Height = 26, Enabled = false };
 
+            // AM-44.3b: the operator action. It runs the same verification read and shows the same preview, then
+            // asks once, and writes only on a Yes. Kept visibly separate from the diagnostic - and it never runs
+            // by itself on connect, open, discovery, refresh or save.
+            AssociateApplyButton = new Button
+            {
+                Text = "Associate saved list with connected organization",
+                Dock = DockStyle.Left,
+                Width = 336,
+                Height = 26,
+                Enabled = false
+            };
+
             SolutionSelector = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = nameof(SolutionChoice.Label) };
             SearchBox = new TextBox { Dock = DockStyle.Right, Width = 210 };
             Label searchHint = new Label { Text = "Filter:", Dock = DockStyle.Right, Width = 46, TextAlign = ContentAlignment.MiddleRight };
@@ -82,7 +94,8 @@ namespace AutomationMonitor.Plugin.UI
 
             Label probeHint = new Label
             {
-                Text = "Read-only checks on the connection, the selected flow and a picked saved list: shapes and counts only, shown in a copyable window.",
+                Text = "Read-only checks on the connection, the selected flow and a picked saved list: shapes and counts only, in a"
+                    + " copyable window. The last button is the one action that can change a saved list, and it asks first.",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true
@@ -93,7 +106,9 @@ namespace AutomationMonitor.Plugin.UI
 
             // Docked controls are laid out back to front, so the identity button is added before the flow probe
             // to sit to its right, exactly as the toolbar's numbered steps rely on. The saved-list check sits
-            // right of the connection check, since both are diagnostics and neither is a discovery step.
+            // right of the connection check, since both are diagnostics and neither is a discovery step, and the
+            // one action that can change a saved identity sits rightmost of all.
+            probeRow.Controls.Add(AssociateApplyButton);
             probeRow.Controls.Add(AssociateButton);
             probeRow.Controls.Add(IdentityButton);
             probeRow.Controls.Add(ProbeButton);
@@ -154,6 +169,13 @@ namespace AutomationMonitor.Plugin.UI
         /// than about the connection or a flow.
         /// </summary>
         public Button AssociateButton { get; }
+
+        /// <summary>
+        /// The AM-44.3b operator action: verify the picked saved list against the connected organization, show the
+        /// association preview, and apply it only on an explicit confirmation. Enabled with the same selection rule
+        /// as the diagnostic; the handler is what refuses when nothing is connected or the read cannot support it.
+        /// </summary>
+        public Button AssociateApplyButton { get; }
 
         // C6 persistence controls: name and save the built watchlist, or open one already saved for this
         // environment. They hold no logic - the host control drives them and Core supplies the wording.
@@ -272,6 +294,7 @@ namespace AutomationMonitor.Plugin.UI
                 SaveWatchlistButton.Enabled = false;
                 OpenWatchlistButton.Enabled = false;
                 AssociateButton.Enabled = false;
+                AssociateApplyButton.Enabled = false;
             }
             else
             {
@@ -332,8 +355,11 @@ namespace AutomationMonitor.Plugin.UI
         {
             OpenWatchlistButton.Enabled = !busy && SelectedSavedWatchlistId != null;
 
-            // The same selection rule as opening: a saved-list check with no list picked has nothing to ask.
+            // The same selection rule as opening: a saved-list check with no list picked has nothing to ask. The
+            // association action needs the same selection - whether the connection can support it is the host's
+            // refusal to make, and it is stated with a reason rather than by leaving the button dead.
             AssociateButton.Enabled = !busy && SelectedSavedWatchlistId != null;
+            AssociateApplyButton.Enabled = !busy && SelectedSavedWatchlistId != null;
         }
 
         private int IndexOfSavedId(string? id)

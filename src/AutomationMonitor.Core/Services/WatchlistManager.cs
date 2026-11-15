@@ -48,8 +48,9 @@ namespace AutomationMonitor.Core.Services
             _clock = clock ?? new SystemClock();
             _ids = ids ?? new GuidIdGenerator();
 
-            // The shipped default defers re-keying a stored list. A caller passes something else only when this
-            // build really can resolve a qualified connected scope - see ScopeResolutionSupport.
+            // The shipped default may re-key a stored scope, because every consumer of a saved scope resolves
+            // the connected organization the same way. A caller passes something else only to model a build that
+            // cannot - see ScopeResolutionSupport.
             _scopeResolution = scopeResolution ?? ScopeResolutionSupport.Shipped;
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using AutomationMonitor.Core.Models;
 using AutomationMonitor.Core.Persistence;
 using AutomationMonitor.Core.Providers.Dataverse;
@@ -125,16 +126,25 @@ public class WatchlistAssociationTests
     }
 
     [Fact]
-    public void ThisBuildShipsWithReassigningAStoredScopeSwitchedOff()
+    public void ThisBuildShipsAbleToReassignAStoredScopeAndStillRefusesToDoItUnprompted()
     {
         WatchlistManager plain = Seed(LegacyList(2));
 
-        // Pinned deliberately: the shipped answer must be "not yet", and it must name the checkpoint that
-        // changes it. AM-44.3 flips this test in the same commit that makes the connected scope resolvable.
-        Assert.False(ScopeResolutionSupport.Shipped.CanReassignStoredScopes);
-        Assert.False(plain.ScopeResolution.CanReassignStoredScopes);
-        Assert.Contains(ScopeResolutionSupport.RequiredCheckpoint, plain.ScopeResolution.DeferredReason, StringComparison.Ordinal);
-        Assert.Contains("AM-44.3", ScopeResolutionSupport.Shipped.DeferredReason, StringComparison.Ordinal);
+        // Pinned deliberately, in both directions. AM-44.3b opened this gate because every consumer of a saved
+        // scope now resolves the connected organization by identity, the previous build reads a re-keyed file
+        // back without loss, and the maintainer observed the resolution running inside XrmToolBox - and because
+        // an association still needs a completed read, a preview the operator read and an explicit confirmation.
+        // The refusal state stays tested so the wording a build that cannot re-key gives never becomes dead code.
+        Assert.True(ScopeResolutionSupport.Shipped.CanReassignStoredScopes);
+        Assert.True(plain.ScopeResolution.CanReassignStoredScopes);
+        Assert.Equal(string.Empty, ScopeResolutionSupport.Shipped.DeferredReason);
+
+        Assert.False(ScopeResolutionSupport.NotYetResolvable.CanReassignStoredScopes);
+        Assert.Contains(
+            ScopeResolutionSupport.RequiredCheckpoint,
+            ScopeResolutionSupport.NotYetResolvable.DeferredReason,
+            StringComparison.Ordinal);
+        Assert.Contains("AM-44.3", ScopeResolutionSupport.NotYetResolvable.DeferredReason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -144,8 +154,8 @@ public class WatchlistAssociationTests
 
         WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 3));
 
-        Assert.Equal(WatchlistAssociationDecision.Deferred, preview.Decision);
-        Assert.False(preview.CanApply);
+        Assert.Equal(WatchlistAssociationDecision.ReadyToConfirm, preview.Decision);
+        Assert.True(preview.CanApply);
         Assert.Equal(3, preview.MemberCount);
         Assert.Equal(2, preview.IncludedCount);
         Assert.Equal(3, preview.RekeyedCount);
@@ -164,14 +174,34 @@ public class WatchlistAssociationTests
     }
 
     [Fact]
-    public void TheShippedBuildDefersTheAssociationAndWritesNothingAtAll()
+    public void TheShippedBuildPreviewsTheAssociationAsReadyAndWritesNothingUntilTheCallerSaves()
     {
         WatchlistManager manager = Seed(LegacyList(3));
         string before = _files.ContentOf(FileName)!;
 
         WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 3));
-        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
 
+        // The gate is open, so the confirmed change applies to the catalog - and the file still does not move
+        // until the caller saves. A session the operator walks away from costs them nothing.
+        Assert.Equal(WatchlistAssociationDecision.ReadyToConfirm, preview.Decision);
+        Assert.Equal(WatchlistOperationOutcome.Applied, result.Outcome);
+        Assert.True(manager.HasUnsavedChanges);
+        Assert.Equal(Qualified, manager.Catalog.Find(LegacyId)!.EnvironmentId);
+        Assert.Equal(before, _files.ContentOf(FileName));
+        Assert.False(_files.FileExists(FileName + ".bak"));
+    }
+
+    [Fact]
+    public void AVersionThatCannotReassignStoredScopesStillDefersAndWritesNothingAtAll()
+    {
+        WatchlistManager manager = Seed(LegacyList(3), ScopeResolutionSupport.NotYetResolvable);
+        string before = _files.ContentOf(FileName)!;
+
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 3));
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
+
+        Assert.Equal(WatchlistAssociationDecision.Deferred, preview.Decision);
         Assert.Equal(WatchlistOperationOutcome.AssociationDeferred, result.Outcome);
         Assert.Contains(ScopeResolutionSupport.RequiredCheckpoint, result.Describe(), StringComparison.Ordinal);
         Assert.False(manager.HasUnsavedChanges);
@@ -187,7 +217,7 @@ public class WatchlistAssociationTests
         WatchlistManager manager = Seed(LegacyList(2));
 
         WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, null);
-        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
 
         Assert.Equal(WatchlistAssociationDecision.Blocked, preview.Decision);
         Assert.Contains(WatchlistAssociationBlocker.EvidenceNotVerified, preview.Blockers);
@@ -213,7 +243,7 @@ public class WatchlistAssociationTests
             : Evidence(kind, members: 3);
 
         WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, evidence);
-        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
 
         Assert.False(evidence.CanSupportAssociation);
         Assert.Equal(WatchlistAssociationDecision.Blocked, preview.Decision);
@@ -278,7 +308,7 @@ public class WatchlistAssociationTests
 
         Assert.Equal(WatchlistAssociationDecision.Blocked, preview.Decision);
         Assert.Contains(WatchlistAssociationBlocker.NothingToAssociate, preview.Blockers);
-        Assert.Equal(WatchlistOperationOutcome.AssociationRefused, manager.AssociateScope(LegacyId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.AssociationRefused, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
     }
 
     [Fact]
@@ -288,7 +318,7 @@ public class WatchlistAssociationTests
 
         WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 3));
         Assert.True(preview.CanApply);
-        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
 
         Assert.Equal(WatchlistOperationOutcome.Applied, result.Outcome);
         Watchlist associated = manager.Catalog.Find(LegacyId)!;
@@ -334,7 +364,7 @@ public class WatchlistAssociationTests
 
         // The read found the same organization the list already names: idempotent, and it dirties nothing.
         Assert.Equal(WatchlistAssociationDecision.NoChange, preview.Decision);
-        Assert.Equal(WatchlistOperationOutcome.NoChange, manager.AssociateScope(LegacyId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.NoChange, manager.AssociateScope(LegacyId, preview, OtherQualified).Outcome);
         Assert.False(manager.HasUnsavedChanges);
         Assert.Equal(before, _files.ContentOf(FileName));
 
@@ -351,7 +381,7 @@ public class WatchlistAssociationTests
         // The operator edited the list between reading and confirming; the preview they hold is stale.
         manager.AddWorkflow(LegacyId, FlowRef.Create(FlowId(9), "Late addition", ProviderKind.PowerAutomate, string.Empty));
 
-        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, Qualified);
 
         Assert.Equal(WatchlistOperationOutcome.Conflict, result.Outcome);
         Assert.Contains("read the identity again", result.Describe(), StringComparison.Ordinal);
@@ -370,7 +400,7 @@ public class WatchlistAssociationTests
         Assert.Equal(0, preview.RekeyedCount);
         Assert.Equal(2, preview.RecordedScopeCount);
 
-        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
         Watchlist after = manager.Catalog.Find(LegacyId)!;
         Assert.Equal(Qualified, after.EnvironmentId);
         Assert.All(after.Members, member => Assert.Equal(Qualified, member.Key.ScopeId));
@@ -389,7 +419,7 @@ public class WatchlistAssociationTests
         WatchlistManager manager = new WatchlistManager(_store, _clock, new FixedIdGenerator(), ScopeResolutionSupport.Resolvable());
         manager.Load();
         WatchlistOperationResult result = manager.AssociateScope(
-            LegacyId, manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2)));
+            LegacyId, manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2)), Qualified);
 
         Assert.Equal(WatchlistOperationOutcome.Applied, result.Outcome);
         EnvironmentProfile? moved = manager.Catalog.Settings.ProfileFor(Qualified);
@@ -414,7 +444,7 @@ public class WatchlistAssociationTests
 
         Assert.Equal(WatchlistAssociationDecision.Blocked, preview.Decision);
         Assert.Contains(WatchlistAssociationBlocker.UnrepresentableMembers, preview.Blockers);
-        Assert.Equal(WatchlistOperationOutcome.AssociationRefused, manager.AssociateScope(LegacyId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.AssociationRefused, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
         Assert.Contains("cannot read back", string.Join(" ", preview.Reasons), StringComparison.Ordinal);
     }
 
@@ -460,6 +490,179 @@ public class WatchlistAssociationTests
         // Same-scope behaviour is preserved: only a kind-qualified scope is refused.
         Assert.Equal(WatchlistOperationOutcome.Applied, result.Outcome);
         Assert.Equal(FlowRef.Environment, manager.Catalog.Find(LegacyId)!.EnvironmentId);
+    }
+
+    [Theory]
+    [InlineData(OtherQualified)]
+    [InlineData("")]
+    public void AConfirmationTheConnectionNoLongerMatchesIsRefusedAndMovesNothing(string connectedScope)
+    {
+        WatchlistManager manager = Seed(LegacyList(2), ScopeResolutionSupport.Resolvable());
+        string before = _files.ContentOf(FileName)!;
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2));
+
+        // The operator clicked confirm after the connection moved (or closed). The evidence behind the preview
+        // still names the organization it read; the caller's scope says something else, so nothing is applied.
+        WatchlistOperationResult result = manager.AssociateScope(LegacyId, preview, connectedScope);
+
+        Assert.Equal(WatchlistOperationOutcome.AssociationRefused, result.Outcome);
+        Assert.False(manager.HasUnsavedChanges);
+        Assert.Equal(string.Empty, manager.Catalog.Find(LegacyId)!.EnvironmentId);
+        Assert.All(manager.Catalog.Find(LegacyId)!.Members, member => Assert.Equal(string.Empty, member.Key.ScopeId));
+        Assert.Equal(before, _files.ContentOf(FileName));
+        Assert.False(_files.FileExists(FileName + ".bak"));
+    }
+
+    [Fact]
+    public void AConnectionSwitchBetweenReadingAndConfirmingNamesBothOrganizationsAndStaysReConfirmable()
+    {
+        WatchlistManager manager = Seed(LegacyList(2), ScopeResolutionSupport.Resolvable());
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2));
+
+        WatchlistOperationResult refused = manager.AssociateScope(LegacyId, preview, OtherQualified);
+
+        string text = refused.Describe();
+        Assert.Contains("Dataverse organization 88888888", text, StringComparison.Ordinal);
+        Assert.Contains("Dataverse organization 77777777", text, StringComparison.Ordinal);
+        Assert.Contains("nothing was changed", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(Organization, text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(OtherOrganization, text, StringComparison.OrdinalIgnoreCase);
+
+        // A refusal is not a consumed confirmation: the same preview applies once the right connection is back.
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
+    }
+
+    [Fact]
+    public void AssociatingOneListLeavesAListFromAnotherOrganizationAndItsSettingsUntouched()
+    {
+        Watchlist legacy = LegacyList(2);
+        Watchlist foreign = BuildList("other-org-list", "Another cloud", OtherQualified, 2, 70);
+        ApplicationSettings settings = ApplicationSettings.Defaults
+            .WithActiveEnvironment(Qualified, Stamp)
+            .WithActiveWatchlist(string.Empty, LegacyId, Stamp)
+            .WithActiveWatchlist(OtherQualified, "other-org-list", Stamp);
+        _store.Write(new WatchlistCatalog(new List<Watchlist> { legacy, foreign }, LegacyId, settings));
+
+        WatchlistManager manager = new WatchlistManager(_store, _clock, new FixedIdGenerator());
+        manager.Load();
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2));
+
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
+        Assert.True(manager.Save().IsUsable);
+
+        Assert.Equal(ShapeOf(foreign), ShapeOf(manager.Catalog.Find("other-org-list")!));
+        Assert.Equal("other-org-list", manager.Catalog.Settings.ActiveWatchlistIdFor(OtherQualified));
+        Assert.Equal(LegacyId, manager.Catalog.Settings.ActiveWatchlistIdFor(Qualified));
+
+        // Each environment sees its own list: the re-keyed list belongs here, the other organization's does not.
+        Assert.DoesNotContain("other-org-list", Ids(manager.Catalog.ForEnvironment(Qualified)));
+        Assert.Contains("other-org-list", Ids(manager.Catalog.ForEnvironment(OtherQualified)));
+        Assert.Contains(LegacyId, Ids(manager.Catalog.ForEnvironment(Qualified)));
+    }
+
+    [Fact]
+    public void AssociatingOneUnverifiedListLeavesEveryOtherListExactlyAsItWas()
+    {
+        Watchlist legacy = LegacyList(2);
+        Watchlist otherUnverified = BuildList("other-unverified", "Still unverified", string.Empty, 3, 40);
+        Watchlist qualified = BuildList("qualified-list", "Saved here", Qualified, 2, 60);
+        _store.Write(new WatchlistCatalog(
+            new List<Watchlist> { legacy, otherUnverified, qualified },
+            LegacyId,
+            ApplicationSettings.Defaults.WithActiveWatchlist(string.Empty, LegacyId, Stamp)));
+
+        WatchlistManager manager = new WatchlistManager(_store, _clock, new FixedIdGenerator());
+        manager.Load();
+
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2));
+        Assert.Equal(WatchlistAssociationDecision.ReadyToConfirm, preview.Decision);
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
+        Assert.True(manager.Save().IsUsable);
+
+        Assert.Equal(ShapeOf(otherUnverified), ShapeOf(manager.Catalog.Find("other-unverified")!));
+        Assert.Equal(ShapeOf(qualified), ShapeOf(manager.Catalog.Find("qualified-list")!));
+
+        // The identities stay separate after a reopen: an unverified list is not associated because a neighbour
+        // was, so asking about it is still an open question, while the list that already names this
+        // organization answers "no change" rather than being migrated a second time.
+        WatchlistManager reopened = new WatchlistManager(_store, _clock, new FixedIdGenerator());
+        reopened.Load();
+
+        Assert.Equal(3, reopened.Catalog.Watchlists.Count);
+        Assert.Equal(string.Empty, reopened.Catalog.Find("other-unverified")!.EnvironmentId);
+        Assert.Equal(
+            WatchlistAssociationDecision.ReadyToConfirm,
+            reopened.PreviewAssociation("other-unverified", Evidence(WorkflowIdentityEvidenceKind.Verified, members: 3)).Decision);
+        Assert.Equal(
+            WatchlistAssociationDecision.NoChange,
+            reopened.PreviewAssociation("qualified-list", Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2)).Decision);
+    }
+
+    [Fact]
+    public void AnAssociationWhoseWriteCannotLandLeavesTheFileOnTheOldIdentityAndSaysSo()
+    {
+        WatchlistManager manager = Seed(LegacyList(2), ScopeResolutionSupport.Resolvable());
+        string before = _files.ContentOf(FileName)!;
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(LegacyId, Evidence(WorkflowIdentityEvidenceKind.Verified, members: 2));
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(LegacyId, preview, Qualified).Outcome);
+
+        // The last step of the save - moving the new file into place - fails, so the store rolls back. The
+        // operator's file still holds the unassociated list, and the manager does not report the change as kept.
+        _files.FailMoves.Add(FakeSettingsFiles.MovePair(FileName + ".new", FileName));
+
+        WatchlistStoreResult saved = manager.Save();
+
+        Assert.False(saved.IsUsable);
+        Assert.True(manager.HasUnsavedChanges);
+        Assert.Equal(before, _files.ContentOf(FileName));
+        Assert.DoesNotContain("dataverse-organization:", _files.ContentOf(FileName), StringComparison.Ordinal);
+
+        WatchlistManager reopened = new WatchlistManager(_store, _clock, new FixedIdGenerator());
+        reopened.Load();
+        Assert.Equal(string.Empty, reopened.Catalog.Find(LegacyId)!.EnvironmentId);
+    }
+
+    /// <summary>A saved list built directly, so a test can hold more than one identity in the catalog.</summary>
+    private static Watchlist BuildList(string id, string name, string scope, int memberCount, int firstId)
+    {
+        WatchlistBuilder builder = new WatchlistBuilder(id, name, WatchlistMembershipMode.Snapshot, null, scope);
+        for (int i = 0; i < memberCount; i++)
+        {
+            builder.AddManualFlow(
+                FlowRef.Create(FlowId(firstId + i), name + " " + i.ToString(CultureInfo.InvariantCulture), ProviderKind.PowerAutomate, scope),
+                Stamp);
+        }
+
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// Everything an untouched list must keep: its name, environment and mode, and per member the workflow id,
+    /// its scope, whether it is monitored and its name. Compared as text so a neighbour's association that
+    /// quietly re-keyed, dropped or re-included anything shows up as a difference.
+    /// </summary>
+    private static string ShapeOf(Watchlist list)
+    {
+        StringBuilder text = new StringBuilder();
+        text.Append(list.Name).Append('|').Append(list.EnvironmentId).Append('|').Append(list.Mode);
+        foreach (WatchlistMember member in list.Members)
+        {
+            text.Append('|').Append(member.Key.WorkflowId).Append(':').Append(member.Key.ScopeId)
+                .Append(':').Append(member.IsIncluded ? "in" : "out").Append(':').Append(member.Workflow.Name);
+        }
+
+        return text.ToString();
+    }
+
+    private static IReadOnlyList<string> Ids(IReadOnlyList<Watchlist> lists)
+    {
+        List<string> ids = new List<string>();
+        foreach (Watchlist list in lists)
+        {
+            ids.Add(list.Id);
+        }
+
+        return ids;
     }
 
     /// <summary>A saved file whose one member has a provider this build cannot rebuild.</summary>

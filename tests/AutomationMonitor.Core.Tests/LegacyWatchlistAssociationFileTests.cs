@@ -188,16 +188,17 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
     }
 
     [Fact]
-    public void TheShippedBuildRefusesToReassignThisFileAndLeavesEveryByteAlone()
+    public void AVersionThatCannotReassignStoredScopesRefusesThisFileAndLeavesEveryByteAlone()
     {
         string bytes = WriteLegacyFile();
 
-        WatchlistManager manager = Open();
+        // The state AM-44.3a shipped in, kept tested so that the refusal path stays honest for any build that
+        // cannot resolve a qualified scope: the plan is real, applying it is refused, the file is not touched.
+        WatchlistManager manager = Open(ScopeResolutionSupport.NotYetResolvable);
         manager.Load();
         WatchlistAssociationPreview preview = manager.PreviewAssociation(ListId, VerifiedEvidence());
-        WatchlistOperationResult result = manager.AssociateScope(ListId, preview);
+        WatchlistOperationResult result = manager.AssociateScope(ListId, preview, Qualified);
 
-        // The plan is real and readable, and applying it is deferred until AM-44.3 can resolve the scope.
         Assert.Equal(WatchlistAssociationDecision.Deferred, preview.Decision);
         Assert.Equal(MemberCount, preview.RekeyedCount);
         Assert.Equal(WatchlistOperationOutcome.AssociationDeferred, result.Outcome);
@@ -217,7 +218,7 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
         WatchlistAssociationPreview preview = manager.PreviewAssociation(ListId, VerifiedEvidence());
         Assert.True(preview.CanApply);
 
-        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(ListId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(ListId, preview, Qualified).Outcome);
         WatchlistStoreResult saved = manager.Save();
 
         Assert.True(saved.IsUsable);
@@ -241,7 +242,7 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
         first.Load();
         Assert.Equal(
             WatchlistOperationOutcome.Applied,
-            first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence())).Outcome);
+            first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence()), Qualified).Outcome);
         Assert.True(first.Save().IsUsable);
 
         WatchlistManager reopened = Open();
@@ -267,7 +268,7 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
         string legacy = WriteLegacyFile();
         WatchlistManager first = Open(ScopeResolutionSupport.Resolvable());
         first.Load();
-        first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence()));
+        first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence()), Qualified);
         Assert.True(first.Save().IsUsable);
         Assert.Contains(Qualified, File.ReadAllText(DataPath), StringComparison.Ordinal);
 
@@ -293,7 +294,7 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
         WriteLegacyFile();
         WatchlistManager first = Open(ScopeResolutionSupport.Resolvable());
         first.Load();
-        first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence()));
+        first.AssociateScope(ListId, first.PreviewAssociation(ListId, VerifiedEvidence()), Qualified);
         Assert.True(first.Save().IsUsable);
         string associated = File.ReadAllText(DataPath);
 
@@ -304,8 +305,99 @@ public sealed class LegacyWatchlistAssociationFileTests : IDisposable
         WatchlistAssociationPreview preview = reopened.PreviewAssociation(ListId, VerifiedEvidence());
 
         Assert.Equal(WatchlistAssociationDecision.NoChange, preview.Decision);
-        Assert.Equal(WatchlistOperationOutcome.NoChange, reopened.AssociateScope(ListId, preview).Outcome);
+        Assert.Equal(WatchlistOperationOutcome.NoChange, reopened.AssociateScope(ListId, preview, Qualified).Outcome);
         Assert.False(reopened.HasUnsavedChanges);
         Assert.Equal(associated, File.ReadAllText(DataPath));
+    }
+
+    private const string SavedListId = "connected-list";
+    private const string SavedFlowA = "cafe0001-1111-2222-3333-444444444444";
+    private const string SavedFlowB = "cafe0002-1111-2222-3333-444444444444";
+
+    private static string Member(string workflowId, string name, string scope, bool included, string origin)
+    {
+        return "{'provider': 'powerautomate', 'scopeId': '" + scope + "', 'workflowId': '" + workflowId + "'"
+            + ", 'name': '" + name + "', 'state': 'enabled', 'stateCode': 1, 'included': "
+            + (included ? "true" : "false")
+            + ", 'addedAtUtc': '2026-11-14T08:00:00+00:00', 'lastSeenUtc': '2026-11-14T08:00:00+00:00'"
+            + ", 'origins': ['" + origin + "'], 'solutionIds': []}";
+    }
+
+    /// <summary>
+    /// The file shape the operator has now: the original unverified list plus a second list saved while
+    /// connected to the same organization, with both environment profiles present. An association must leave
+    /// everything except the one list it was asked about exactly itself.
+    /// </summary>
+    private static string TwoListDocument()
+    {
+        string legacyMembers = Member(FlowId(1), "Legacy flow 1", string.Empty, false, "manual")
+            + ", " + Member(FlowId(2), "Legacy flow 2", string.Empty, true, "solution");
+        string savedMembers = Member(SavedFlowA, "Found by solution import", Qualified, true, "solution")
+            + ", " + Member(SavedFlowB, "Found by hand", Qualified, false, "manual");
+
+        return ("{'schemaVersion': 1, 'kind': 'watchlist-store', 'savedAtUtc': '2026-11-15T09:45:39+00:00',"
+            + " 'writtenBy': 'Automation Monitor for XrmToolBox',\n"
+            + "  'app': { 'activeEnvironmentId': '" + Qualified + "', 'defaultAutoRefresh': 'off', 'defaultDateRange': '1h',"
+            + " 'defaultShowExcludedMembers': true, 'defaultThresholds': null, 'environments': ["
+            + " { 'environmentId': '', 'activeWatchlistId': '" + ListId + "', 'autoRefresh': null, 'dateRange': '1h',"
+            + " 'lastUsedUtc': '2026-11-15T09:45:39+00:00' },"
+            + " { 'environmentId': '" + Qualified + "', 'activeWatchlistId': '" + SavedListId + "', 'autoRefresh': null,"
+            + " 'dateRange': '7d', 'lastUsedUtc': '2026-11-15T09:45:39+00:00' } ] },\n"
+            + "  'watchlists': { 'activeWatchlistId': '" + ListId + "', 'items': [\n"
+            + "    { 'id': '" + ListId + "', 'name': 'My production flows', 'description': '', 'environmentId': '',"
+            + " 'membershipMode': 'snapshot', 'createdAtUtc': '2026-11-01T08:00:00+00:00',"
+            + " 'modifiedAtUtc': '2026-11-14T08:00:00+00:00', 'lastMembershipRefreshUtc': '2026-11-14T08:00:00+00:00',"
+            + " 'sourceSolutionIds': ['" + Solution + "'], 'coverageState': 'complete', 'coverageNotes': [],"
+            + " 'preferences': { 'autoRefresh': null, 'dateRange': null, 'showExcludedMembers': null, 'thresholds': null },"
+            + " 'members': [" + legacyMembers + "] },\n"
+            + "    { 'id': '" + SavedListId + "', 'name': 'Flows found here', 'description': '', 'environmentId': '" + Qualified + "',"
+            + " 'membershipMode': 'snapshot', 'createdAtUtc': '2026-11-14T08:00:00+00:00',"
+            + " 'modifiedAtUtc': '2026-11-14T08:00:00+00:00', 'lastMembershipRefreshUtc': '2026-11-14T08:00:00+00:00',"
+            + " 'sourceSolutionIds': [], 'coverageState': 'complete', 'coverageNotes': [],"
+            + " 'preferences': { 'autoRefresh': null, 'dateRange': null, 'showExcludedMembers': null, 'thresholds': null },"
+            + " 'members': [" + savedMembers + "] }\n"
+            + "  ] } }").Replace('\'', '"');
+    }
+
+    [Fact]
+    public void AssociatingTheLegacyListLeavesTheListAlreadySavedInThisOrganizationUntouched()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(DataPath, TwoListDocument());
+
+        WatchlistManager manager = Open();
+        Assert.True(manager.Load().IsUsable);
+
+        WatchlistAssociationPreview preview = manager.PreviewAssociation(ListId, VerifiedEvidence());
+        Assert.Equal(WatchlistAssociationDecision.ReadyToConfirm, preview.Decision);
+        Assert.Equal(2, preview.RekeyedCount);
+        Assert.Equal(WatchlistOperationOutcome.Applied, manager.AssociateScope(ListId, preview, Qualified).Outcome);
+        Assert.True(manager.Save().IsUsable);
+
+        WatchlistManager reopened = Open();
+        Assert.True(reopened.Load().IsUsable);
+        Assert.Equal(2, reopened.Catalog.Watchlists.Count);
+
+        Watchlist associated = reopened.Catalog.Find(ListId)!;
+        Assert.Equal(Qualified, associated.EnvironmentId);
+        Assert.Equal(2, associated.Members.Count);
+        Assert.All(associated.Members, member => Assert.Equal(Qualified, member.Key.ScopeId));
+
+        Watchlist saved = reopened.Catalog.Find(SavedListId)!;
+        Assert.Equal("Flows found here", saved.Name);
+        Assert.Equal(Qualified, saved.EnvironmentId);
+        Assert.Equal(2, saved.Members.Count);
+        Assert.Equal(SavedFlowA, saved.Members[0].Key.WorkflowId);
+        Assert.Equal(SavedFlowB, saved.Members[1].Key.WorkflowId);
+        Assert.True(saved.Members[0].IsIncluded);
+        Assert.False(saved.Members[1].IsIncluded);
+        Assert.Equal("Found by solution import", saved.Members[0].Workflow.Name);
+        Assert.Equal(WatchlistMembershipMode.Snapshot, saved.Mode);
+
+        // The environment's selection follows the list the operator associated, and the unverified profile that
+        // remembered the legacy selection is kept rather than rewritten: an association moves one identity, not
+        // the whole file.
+        Assert.Equal(ListId, reopened.Catalog.Settings.ActiveWatchlistIdFor(Qualified));
+        Assert.Equal(ListId, reopened.Catalog.Settings.ActiveWatchlistIdFor(string.Empty));
     }
 }

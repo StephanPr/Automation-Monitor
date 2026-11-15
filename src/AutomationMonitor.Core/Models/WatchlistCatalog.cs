@@ -223,7 +223,11 @@ namespace AutomationMonitor.Core.Models
         /// <summary>
         /// The existing list whose name would collide with a new one in the same environment scope.
         /// Two environments may each have a list called "Go-live"; one environment may not, because
-        /// an operator picking from a dropdown cannot tell two identical names apart.
+        /// an operator picking from a dropdown cannot tell two identical names apart. "Same environment" is
+        /// the shared scope rule (<see cref="ResourceScope.NamesSameEnvironment"/>), so a list whose stored
+        /// scope spells the connected organization a different way is still the same environment and still
+        /// clashes - the listing rule and the naming rule must not disagree, or association would let one
+        /// organization hold two lists with one name.
         /// </summary>
         public Watchlist? FindSameName(string? name, string? environmentId)
         {
@@ -233,11 +237,10 @@ namespace AutomationMonitor.Core.Models
             }
 
             string wanted = name!.Trim();
-            string scope = (environmentId ?? string.Empty).Trim();
             foreach (Watchlist watchlist in Watchlists)
             {
                 if (string.Equals(watchlist.Name, wanted, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(watchlist.EnvironmentId, scope, StringComparison.OrdinalIgnoreCase))
+                    && ResourceScope.NamesSameEnvironment(watchlist.EnvironmentId, environmentId))
                 {
                     return watchlist;
                 }

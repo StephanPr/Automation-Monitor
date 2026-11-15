@@ -11,30 +11,34 @@ namespace AutomationMonitor.Core.Services
     /// Whether this build may reassign a stored watchlist's scope. It is a value rather than an <c>if</c>
     /// inside the association path because the question is a property of the whole build, not of one
     /// method: re-keying a saved list to <c>dataverse-organization:&lt;guid&gt;</c> only leaves the list
-    /// usable if the code that opens it, lists it, reconciles its members and matches discovered flows
-    /// against it understands that same scope.
+    /// usable if the code that opens it, lists it, names it, holds its per-environment settings, reconciles
+    /// its members and matches discovered flows against it understands that same scope.
     ///
     /// <para>
-    /// <b>The shipped answer is still <see cref="NotYetResolvable"/>.</b> What changed in AM-44.3a is the
-    /// half that used to be missing: discovery now derives the qualified organization scope from a
-    /// completed identity read, every saved-watchlist consumer keys off that same resolved scope, an
-    /// unverified stored member stays visible but is never matched to a verified one, and reconciliation
-    /// reports a vocabulary mismatch as unresolved rather than as gone. What has not changed is that a
-    /// stored identity may only move when the operator confirms it - and that confirmation is AM-44.3b,
-    /// which may not be built until this resolution has been observed working inside XrmToolBox
-    /// (docs/roadmap.md, section 3). Flipping this value before that gate is what this class exists to
-    /// make impossible.
+    /// <b>The shipped answer is <see cref="Resolvable"/>.</b> AM-44.3a made every one of those consumers
+    /// resolve the connected organization from the same completed identity read; AM-44.3b closed the last two
+    /// that still compared scope text - the name-clash check and the per-environment profile - behind one shared
+    /// rule (<see cref="ResourceScope.NamesSameEnvironment"/>), and put a connection-context guard on the apply
+    /// path so a confirmation cannot land against a different organization. The previous-build round trip proves
+    /// the release before this one reads a re-keyed file back and re-saves it without loss. The maintainer reported
+    /// the resolution working inside XrmToolBox (docs/roadmap.md, section 3, item 10) and asked for this action to be
+    /// enabled; that report did not cover the connection-switch step or the scaling and Tab-order detail, which stay
+    /// open as item 11.
     /// </para>
     ///
     /// <para>
-    /// <see cref="Resolvable"/> stays available for the association mechanics' own tests, so a closed
-    /// product gate never hides an untested code path; no shipped call site passes it.
+    /// What that gate does not license is doing any of it unprompted. A stored identity moves only when a
+    /// completed verification read produced the evidence, the operator read the preview of that exact change and
+    /// confirmed it, and the connection still names the organization the read named. Nothing associates a list
+    /// on connect, open, discovery, refresh or save.
     /// </para>
     /// </summary>
     public sealed class ScopeResolutionSupport
     {
-        /// <summary>The checkpoint that must land before a stored scope may be reassigned.</summary>
+        /// <summary>The checkpoint whose gate had to land before a stored scope could be reassigned.</summary>
         public const string RequiredCheckpoint = "AM-44.3";
+
+        private static readonly ScopeResolutionSupport CanReassign = new ScopeResolutionSupport(true, string.Empty);
 
         private readonly bool _canReassign;
         private readonly string _deferredReason;
@@ -46,36 +50,41 @@ namespace AutomationMonitor.Core.Services
         }
 
         /// <summary>
-        /// The state this version ships: the verification read and the preview work, applying them does not.
-        /// Named <c>Shipped</c> so a test can pin the product's real answer rather than a lookalike.
+        /// The state this version ships: a stored scope may be reassigned, and only through the association
+        /// action the operator started, previewed and confirmed. Named <c>Shipped</c> so a test can pin the
+        /// product's real answer rather than a lookalike.
         /// </summary>
         public static ScopeResolutionSupport Shipped
         {
-            get { return NotYetResolvable; }
+            get { return CanReassign; }
         }
 
-        /// <summary>See <see cref="Shipped"/> - association is understood and previewed, not applied.</summary>
+        /// <summary>
+        /// The state in which applying an association is safe: every consumer of a saved scope resolves the
+        /// connected organization the same way. This is what <see cref="Shipped"/> returns today.
+        /// </summary>
+        public static ScopeResolutionSupport Resolvable()
+        {
+            return CanReassign;
+        }
+
+        /// <summary>
+        /// The opposite state, kept for the refusal path and for the tests that prove a build which cannot
+        /// resolve a qualified connected scope says so instead of half-applying an identity. No shipped call
+        /// site uses it in this version; it is what the deferral wording and its tests are written against.
+        /// </summary>
         public static ScopeResolutionSupport NotYetResolvable
         {
             get
             {
                 return new ScopeResolutionSupport(
                     false,
-                    "This version does not apply an environment association yet. It can now resolve the connected Dataverse organization"
+                    "This version does not apply an environment association yet. It can resolve the connected Dataverse organization"
                         + " when it loads, lists and matches saved watchlists, and newly discovered flows carry that scope - but re-keying a"
-                        + " list you saved earlier stays switched off until that resolution has been verified running inside XrmToolBox, and"
-                        + " it would then happen only on your confirmation (" + RequiredCheckpoint + ")."
+                        + " list you saved earlier is switched off in this build until that resolution has been verified running inside"
+                        + " XrmToolBox, and it would then happen only on your confirmation (" + RequiredCheckpoint + ")."
                         + " Nothing was changed and the saved file was not written.");
             }
-        }
-
-        /// <summary>
-        /// The state AM-44.3 must reach, where applying an association is safe. Also what the association
-        /// mechanics' own tests use, so a closed gate never hides an untested code path.
-        /// </summary>
-        public static ScopeResolutionSupport Resolvable()
-        {
-            return new ScopeResolutionSupport(true, string.Empty);
         }
 
         /// <summary>True when re-keying a stored list leaves it usable, so an association may be applied.</summary>

@@ -146,7 +146,9 @@ namespace AutomationMonitor.Core.Models
             List<EnvironmentProfile> profiles = new List<EnvironmentProfile>(Environments);
             for (int i = 0; i < profiles.Count; i++)
             {
-                if (string.Equals(profiles[i].EnvironmentId, profile.EnvironmentId, StringComparison.OrdinalIgnoreCase))
+                // Same rule as the lookup, so an organization can never end up with two profiles whose
+                // settings disagree - the one that is found first would win and the other would be invisible.
+                if (ResourceScope.NamesSameEnvironment(profiles[i].EnvironmentId, profile.EnvironmentId))
                 {
                     profiles[i] = profile;
                     return Copy(profiles, activeEnvironmentId);
@@ -242,10 +244,12 @@ namespace AutomationMonitor.Core.Models
 
         private static EnvironmentProfile? Find(IEnumerable<EnvironmentProfile> profiles, string? environmentId)
         {
-            string scope = (environmentId ?? string.Empty).Trim();
+            // The shared environment rule: a profile written by an older build, a hand-edited file or any other
+            // spelling of the same organization is this environment's profile. Compared as text it would read as
+            // "no settings stored here", and the caller would silently start from defaults.
             foreach (EnvironmentProfile profile in profiles)
             {
-                if (string.Equals(profile.EnvironmentId, scope, StringComparison.OrdinalIgnoreCase))
+                if (ResourceScope.NamesSameEnvironment(profile.EnvironmentId, environmentId))
                 {
                     return profile;
                 }

@@ -239,6 +239,42 @@ namespace AutomationMonitor.Core.Models
                 && string.Equals(Identifier, other.Identifier, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Whether two stored scope values name the same environment for every consumer that has to group
+        /// saved content by environment - listing a catalog, checking a name clash, finding the settings
+        /// profile of the connected organization. It is one rule on purpose: two answers to "same environment"
+        /// is how a list ends up named twice or an organization ends up with two profiles.
+        ///
+        /// <para>
+        /// Three arms, and the order matters. Two unverified scopes name the same thing ("nothing was
+        /// recorded"), which is what keeps a legacy file's settings together; an unverified scope never names
+        /// a qualified one. Two scopes this build can canonicalise are compared on what they name, so a brace,
+        /// a dash or a change of case cannot split one organization in two. Everything else - a bare legacy
+        /// environment id, a kind token this build does not implement, a damaged identifier - is compared as
+        /// the text it is, case-insensitively, because a value this build cannot interpret is not evidence
+        /// about any other value. Unlike the catalog's listing rule, an unverified stored scope is
+        /// not treated as belonging to the connected environment: a name clash and a profile are per
+        /// environment, and an unrecorded environment has no identity to share.
+        /// </para>
+        /// </summary>
+        public static bool NamesSameEnvironment(string? left, string? right)
+        {
+            ResourceScope a = Read(left);
+            ResourceScope b = Read(right);
+
+            if (a.IsUnverified || b.IsUnverified)
+            {
+                return a.IsUnverified && b.IsUnverified;
+            }
+
+            if (a.IsSameResourceAs(b))
+            {
+                return true;
+            }
+
+            return string.Equals(a.Text, b.Text, StringComparison.OrdinalIgnoreCase);
+        }
+
         public bool Equals(ResourceScope? other)
         {
             if (other == null)

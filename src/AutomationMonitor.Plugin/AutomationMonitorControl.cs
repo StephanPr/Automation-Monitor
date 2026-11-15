@@ -102,6 +102,7 @@ namespace AutomationMonitor.Plugin
             view.ProbeButton.Click += (sender, args) => ExecuteMethod(RunFlowRunProbe);
             view.IdentityButton.Click += (sender, args) => ExecuteMethod(RunIdentityProbe);
             view.AssociateButton.Click += (sender, args) => ExecuteMethod(VerifySavedList);
+            view.AssociateApplyButton.Click += (sender, args) => ExecuteMethod(AssociateSavedList);
             view.CancelButton.Click += (sender, args) => CancelRunningWork();
             view.SearchBox.TextChanged += (sender, args) => BindSolutionChoices();
             view.SolutionSelector.SelectedIndexChanged += (sender, args) => OnSolutionChanged();
@@ -621,15 +622,35 @@ namespace AutomationMonitor.Plugin
         }
 
         /// <summary>
-        /// AM-44.2: check one saved list against the organization this connection is authenticated against, and
-        /// show what attaching that identity would do. The action reads and reports; it writes nothing - no
-        /// settings file, no watchlist - and it never applies anything, because this build cannot yet resolve a
-        /// qualified connected scope when it loads and matches saved watchlists. Re-keying a stored list before
-        /// then would leave it naming an identity the monitoring path cannot match, which is a list the operator
-        /// can no longer use; <see cref="ScopeResolutionSupport"/> carries that deferral and names the checkpoint
-        /// that lifts it.
+        /// AM-44.2's read-only diagnostic: check one saved list against the organization this connection is
+        /// authenticated against and show what attaching that identity would do. It reads and reports; it writes
+        /// nothing - no settings file, no watchlist - and it never asks for a confirmation.
         /// </summary>
         private void VerifySavedList()
+        {
+            CheckSavedListIdentity(false);
+        }
+
+        /// <summary>
+        /// AM-44.3b's operator action: the same verification read and the same preview, then one explicit
+        /// confirmation, then the write of exactly the change that preview described. Nothing about connecting,
+        /// opening, discovering, refreshing or saving reaches this path by itself, and no list is ever associated
+        /// without the operator answering Yes to the change in front of them.
+        /// </summary>
+        private void AssociateSavedList()
+        {
+            CheckSavedListIdentity(true);
+        }
+
+        /// <summary>
+        /// The verification read both actions share, so there is one route from a saved list to an identity claim.
+        /// The organization the evidence names is the one this action resolved through the same mechanism discovery
+        /// and the saved-list scope use, and the connection is checked before anything is shown. When
+        /// <paramref name="associate"/> is set, the preview the operator has just read is what they are then asked
+        /// to confirm, and only a preview that still describes the catalog - applied against a connection that
+        /// still names the verified organization - may write.
+        /// </summary>
+        private void CheckSavedListIdentity(bool associate)
         {
             // Captured before the read: the organization the evidence names must be the one this action
             // resolved, through the same mechanism discovery and the saved-list scope use, and the check that
@@ -673,12 +694,19 @@ namespace AutomationMonitor.Plugin
                 keys.Add(member.Key);
             }
 
+            // The stamp the list carries at the moment the operator asked. A confirmation is only valid for the
+            // list as it was then, so this travels with the preview and Core refuses if the list moved.
+            DateTimeOffset? expectedModifiedAtUtc = list.ModifiedAtUtc;
+
             DataverseWorkflowIdentitySource source = new DataverseWorkflowIdentitySource(operation.ConnectedService);
             DataverseWorkflowIdentityProbe probe = new DataverseWorkflowIdentityProbe(source, clock);
             CancellationToken token = BeginWork();
 
             view.SetBusy(true);
-            view.Say("Verifying the saved list against the connected organization (one identity read plus small bounded queries; nothing is written)...");
+            view.Say(associate
+                ? "Checking the saved list against the connected organization before asking you to confirm anything"
+                    + " (one identity read plus small bounded queries; nothing is written yet)..."
+                : "Verifying the saved list against the connected organization (one identity read plus small bounded queries; nothing is written)...");
 
             WorkAsync(new WorkAsyncInfo
             {
@@ -693,7 +721,12 @@ namespace AutomationMonitor.Plugin
                     // the members missing.
                     ConnectedOrganization organization = operation.Resolve(token);
                     WorkflowIdentityEvidence evidence = probe.Verify(organization.Scope, keys, token);
-                    args.Result = new SavedListReading(operation.Ticket, organization, evidence, mgr.PreviewAssociation(listId, evidence));
+                    args.Result = new SavedListReading(
+                        operation.Ticket,
+                        organization,
+                        evidence,
+                        mgr.PreviewAssociation(listId, evidence),
+                        expectedModifiedAtUtc);
                 },
                 PostWorkCallBack = args =>
                 {
@@ -725,8 +758,23 @@ namespace AutomationMonitor.Plugin
                     LogProbeResult(
                         reading.Evidence.CanSupportAssociation ? ProbeReportSeverity.Information : ProbeReportSeverity.Warning,
                         report);
-                    view.Say(AssociationSummary(reading));
-                    view.ShowProbeReport(report, "Saved list identity - verification and preview");
+
+                    // The report is modal, so the whole preview is on screen and readable before any question is
+                    // asked. Only the association action goes on to ask; the diagnostic stops at the truth.
+                    view.ShowProbeReport(
+                        report,
+                        associate
+                            ? "Associate saved list - read the preview before deciding"
+                            : "Saved list identity - verification and preview");
+
+                    if (associate)
+                    {
+                        ConfirmAndApplyAssociation(operation, mgr, listId, reading);
+                    }
+                    else
+                    {
+                        view.Say(AssociationSummary(reading));
+                    }
                 }
             });
         }
@@ -763,6 +811,195 @@ namespace AutomationMonitor.Plugin
         }
 
         /// <summary>
+        /// The confirmation step, offered only when the read supports an association and the preview says the
+        /// change is ready. Every other decision is reported and never acted on. A Yes is then re-checked against
+        /// the connection the read happened on - the operator may have switched or closed it while the preview was
+        /// on screen - and Core re-checks the preview, the list and the organization before a byte is written.
+        /// </summary>
+        private void ConfirmAndApplyAssociation(
+            DataverseOperation operation,
+            WatchlistManager mgr,
+            string? listId,
+            SavedListReading reading)
+        {
+            WatchlistAssociationPreview preview = reading.Preview!;
+            if (preview.Decision != WatchlistAssociationDecision.ReadyToConfirm)
+            {
+                view.Say(AssociationSummary(reading)
+                    + " Nothing was associated: the change has to be ready before it can be confirmed.");
+                return;
+            }
+
+            if (!environments.IsCurrent(operation.Ticket))
+            {
+                view.Say(ConnectionContext.DescribeDiscard("saved-list check"));
+                return;
+            }
+
+            string text = "Associate the saved list \"" + preview.ListName + "\" with "
+                + ResourceScopeLabel.Describe(preview.TargetScope) + "?"
+                + Environment.NewLine + Environment.NewLine
+                + "- the environment recorded on the list, and on each of its " + preview.RekeyedCount
+                    + " member(s), becomes that organization;"
+                + Environment.NewLine
+                + "- workflow ids, names, which members are monitored, provenance and every other saved list stay exactly as they are;"
+                + Environment.NewLine
+                + "- the file on disk is kept first as " + SettingsLayout.DataFileName + ".bak, so the change can be undone;"
+                + Environment.NewLine + Environment.NewLine
+                + "The complete preview is in the window you just closed. Nothing is written unless you press Yes.";
+
+            DialogResult answer = MessageBox.Show(
+                (IWin32Window?)FindForm() ?? this,
+                text,
+                "Associate saved list with connected organization",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (answer != DialogResult.Yes)
+            {
+                view.Say("Nothing was associated. The saved list still records no environment, and nothing was written.");
+                return;
+            }
+
+            ApplyAssociation(operation, mgr, listId, preview, reading);
+        }
+
+        /// <summary>
+        /// The write, on a worker like every other touch of the saved file. It re-checks the connection, asks the
+        /// same resolver what organization the connection names now (cached, so no second identity read) and hands
+        /// that to Core, which refuses a mismatched organization, a preview that no longer describes the list, or a
+        /// file this build could not write back, and answers "nothing to change" when the list already carries the
+        /// identity. The catalog is deliberately not re-read first: that would drop edits the operator made
+        /// elsewhere in this session, and a preview invalidated by an edit is refused by Core rather than quietly
+        /// re-planned onto whatever the file holds now.
+        /// </summary>
+        private void ApplyAssociation(
+            DataverseOperation operation,
+            WatchlistManager mgr,
+            string? listId,
+            WatchlistAssociationPreview preview,
+            SavedListReading reading)
+        {
+            CancellationToken token = BeginWork();
+            view.SetBusy(true);
+            view.Say("Associating the saved list and writing the file...");
+
+            WorkAsync(new WorkAsyncInfo
+            {
+                Message = "Associating the saved list...",
+                IsCancelable = false,
+                Work = (worker, args) =>
+                {
+                    if (!environments.IsCurrent(operation.Ticket))
+                    {
+                        args.Result = AssociationOutcome.Discarded();
+                        return;
+                    }
+
+                    ConnectedOrganization organization = operation.Resolve(token);
+                    WatchlistOperationResult applied = mgr.AssociateScope(
+                        listId,
+                        preview,
+                        organization.ScopeText,
+                        reading.ExpectedModifiedAtUtc);
+
+                    if (applied.Outcome == WatchlistOperationOutcome.NoChange)
+                    {
+                        args.Result = AssociationOutcome.NothingToChange(applied, organization);
+                        return;
+                    }
+
+                    if (!applied.IsApplied || applied.Watchlist == null)
+                    {
+                        args.Result = AssociationOutcome.Refused(applied, organization);
+                        return;
+                    }
+
+                    WatchlistStoreResult saved = mgr.Save();
+                    args.Result = saved.IsUsable
+                        ? AssociationOutcome.Written(applied, saved, organization)
+                        : AssociationOutcome.WriteFailed(applied, saved, organization);
+                },
+                PostWorkCallBack = args => OnAssociationApplied(args.Error, args.Result as AssociationOutcome, mgr)
+            });
+        }
+
+        /// <summary>
+        /// Where an association attempt ended. Only the kept case re-binds anything, and it re-binds with the
+        /// organization the write actually used; every other case states the outcome and leaves the display on
+        /// what is known to be stored.
+        /// </summary>
+        private void OnAssociationApplied(Exception? error, AssociationOutcome? outcome, WatchlistManager mgr)
+        {
+            EndWork();
+            view.SetBusy(false);
+
+            if (error != null)
+            {
+                ReportFailure(error, AssociationSource);
+                return;
+            }
+
+            if (outcome == null)
+            {
+                view.Say("The association returned no result object at all, so the state of the saved file is unknown.");
+                LogWarning("Automation Monitor's association returned no result object.");
+                return;
+            }
+
+            if (outcome.WasDiscarded)
+            {
+                view.Say(outcome.Message);
+                LogWarning("Automation Monitor discarded an association whose connection changed before the write.");
+                return;
+            }
+
+            if (outcome.NeedsReload)
+            {
+                // The write could not land, so nothing this session holds is known to be on disk. The saved lists
+                // have to be read again before another change is offered.
+                lastReadScope = null;
+                watchlistIsSaved = false;
+                RefreshWatchlistState();
+                view.Say(outcome.Message);
+                LogError("Automation Monitor could not write the association to the saved watchlists.");
+                return;
+            }
+
+            if (!outcome.IsKept)
+            {
+                // Refused, or nothing to change: no write happened, so Core's reason is the last word and the
+                // screen keeps showing what is known to be stored.
+                view.SetWatchlistState(DescribeState());
+                view.Say(outcome.Message);
+                if (outcome.IsRefusal)
+                {
+                    LogProbeResult(ProbeReportSeverity.Warning, outcome.Message);
+                }
+
+                return;
+            }
+
+            Watchlist associated = outcome.Watchlist!;
+            watchlist = associated;
+            watchlistIsSaved = true;
+
+            // Bound with the organization the change was written under, not whatever the connection reports by
+            // now: the list now belongs to the qualified environment, and the drop-down has to show it there for
+            // the operator to see the change they confirmed.
+            connectedOrganization = outcome.Organization;
+            lastReadScope = outcome.Organization.ScopeText;
+            view.BindFlows(ToRows(IncludedWorkflows(associated), outcome.Organization));
+            view.ShowWatchlist(associated);
+            BindSavedWatchlists(mgr, outcome.Organization.ScopeText, associated.Id);
+            view.SetSaveEnabled(false);
+            view.SetWatchlistState("Saved");
+            view.Say(outcome.Message);
+            LogProbeResult(ProbeReportSeverity.Information, outcome.Message);
+        }
+
+        /// <summary>
         /// The Core values one saved-list check produced, carried across the worker boundary as one object with
         /// the connection ticket and organization they were read against, so the status line, the report and the
         /// environment label can never disagree about which read they describe - and so a result from a
@@ -774,12 +1011,14 @@ namespace AutomationMonitor.Plugin
                 ConnectionTicket ticket,
                 ConnectedOrganization organization,
                 WorkflowIdentityEvidence evidence,
-                WatchlistAssociationPreview preview)
+                WatchlistAssociationPreview preview,
+                DateTimeOffset? expectedModifiedAtUtc)
             {
                 Ticket = ticket;
                 Organization = organization;
                 Evidence = evidence;
                 Preview = preview;
+                ExpectedModifiedAtUtc = expectedModifiedAtUtc;
             }
 
             public ConnectionTicket Ticket { get; }
@@ -789,6 +1028,12 @@ namespace AutomationMonitor.Plugin
             public WorkflowIdentityEvidence? Evidence { get; }
 
             public WatchlistAssociationPreview? Preview { get; }
+
+            /// <summary>
+            /// The list's stored modified stamp when the check began, carried to the confirmation so Core can
+            /// refuse a preview whose list changed while the operator was reading it.
+            /// </summary>
+            public DateTimeOffset? ExpectedModifiedAtUtc { get; }
         }
 
         private void BindSolutionChoices()
@@ -1316,6 +1561,98 @@ namespace AutomationMonitor.Plugin
             public static SaveOutcome Discarded(string message)
             {
                 return new SaveOutcome(false, true, null, ConnectedOrganization.NotAttempted, message);
+            }
+        }
+
+        /// <summary>
+        /// Where an association attempt ended, carried across the worker boundary. The distinction that matters
+        /// to the screen is whether anything is now known to be stored: only <see cref="IsKept"/> re-binds,
+        /// <see cref="NeedsReload"/> says a write was attempted and could not land (so nothing this session holds
+        /// is known to be on disk), and a refusal or a no-op leaves the display exactly as it was.
+        /// </summary>
+        private sealed class AssociationOutcome
+        {
+            private AssociationOutcome(
+                bool kept,
+                bool discarded,
+                bool needsReload,
+                bool refusal,
+                Watchlist? watchlist,
+                ConnectedOrganization organization,
+                string message)
+            {
+                IsKept = kept;
+                WasDiscarded = discarded;
+                NeedsReload = needsReload;
+                IsRefusal = refusal;
+                Watchlist = watchlist;
+                Organization = organization ?? ConnectedOrganization.NotAttempted;
+                Message = message;
+            }
+
+            /// <summary>True only when the change was applied and written; the display may be re-bound from it.</summary>
+            public bool IsKept { get; }
+
+            /// <summary>True when the connection changed before the write: nothing was done and nothing failed.</summary>
+            public bool WasDiscarded { get; }
+
+            /// <summary>True when a write was attempted and could not land, so the file must be read again.</summary>
+            public bool NeedsReload { get; }
+
+            /// <summary>True when Core refused the change; the reason belongs in the log as well as the bar.</summary>
+            public bool IsRefusal { get; }
+
+            public Watchlist? Watchlist { get; }
+
+            /// <summary>
+            /// The organization the association was applied against - the one the write used, not whatever the
+            /// connection reports afterwards, so the list is shown in the environment it now belongs to.
+            /// </summary>
+            public ConnectedOrganization Organization { get; }
+
+            public string Message { get; }
+
+            public static AssociationOutcome Discarded()
+            {
+                return new AssociationOutcome(
+                    false, true, false, false, null, ConnectedOrganization.NotAttempted,
+                    ConnectionContext.DescribeDiscard("association"));
+            }
+
+            public static AssociationOutcome Refused(WatchlistOperationResult applied, ConnectedOrganization organization)
+            {
+                return new AssociationOutcome(false, false, false, true, null, organization, applied.Describe());
+            }
+
+            public static AssociationOutcome NothingToChange(
+                WatchlistOperationResult applied,
+                ConnectedOrganization organization)
+            {
+                return new AssociationOutcome(false, false, false, false, null, organization, applied.Describe());
+            }
+
+            public static AssociationOutcome WriteFailed(
+                WatchlistOperationResult applied,
+                WatchlistStoreResult saved,
+                ConnectedOrganization organization)
+            {
+                return new AssociationOutcome(
+                    false, false, true, false, null, organization,
+                    "NOTHING IS STORED - the association was prepared" + (applied.Watchlist == null
+                        ? string.Empty
+                        : " for \"" + applied.Watchlist.Name + "\"")
+                        + " but the file could not be written, so the saved lists must be read again before any further"
+                        + " change. " + saved.Describe());
+            }
+
+            public static AssociationOutcome Written(
+                WatchlistOperationResult applied,
+                WatchlistStoreResult saved,
+                ConnectedOrganization organization)
+            {
+                return new AssociationOutcome(
+                    true, false, false, false, applied.Watchlist, organization,
+                    applied.Describe() + " The previous contents are kept as " + SettingsLayout.DataFileName + ".bak.");
             }
         }
 

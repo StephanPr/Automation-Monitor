@@ -21,7 +21,8 @@ against a live environment. Every claim below names its evidence. Product behavi
 | The solution read against a real tenant | `complete - 975 row(s) over 4 page(s)` | First live session, 2026-11-09, after the AM-32 type-read repair | **Observed live**: the AM-32 cast defect did not return |
 | `WorkflowActivity` (the table M7 needs for classic workflows) | absent in every environment tried | First live session, 2026-11-09 | **Observed live**: M7 stays blocked on an alternative source, not on our query |
 | The previous released build (commit `be8ea8b`, the last commit before AM-44.1) reads and re-saves a version-1 file whose members carry `dataverse-organization:<guid>`, an unknown-kind scope and a damaged qualified scope | 6 of 6 members read, 6 written back, every scope value byte-for-byte the same, `schemaVersion` still 1, `kind` still `watchlist-store`, inclusion flags and member provenance unchanged, no refusal raised | `dotnet run -c Release --project %TEMP%\am441-compat\Am441Compat.csproj` on Windows 11, 2026-11-15 — a harness outside the repository that generates the fixtures with this build's `WatchlistManager` and opens them with the worktree build's own `SettingsFileStore` + `JsonWatchlistStore` + `DataContractJsonSettingsSerializer` | **Verified on Windows 11**: `COMPATIBILITY: PASS` over three fixtures (qualified scopes, the real 59-member unscoped shape, mixed GUID spellings). AC-30's condition is met, so `schemaVersion` stays 1. Re-run before the first production write of a qualified scope (AM-44.2). **Re-run on 2026-11-15 for AM-44.3a against the build that actually shipped it (see the next row) and passed** |
-| The same round trip against commit `b318416` - the AM-44.2a build deployed on the primary host, and therefore the build a user still has installed when AM-44.3a writes its first qualified scope - using the shape AM-44.3a writes: a list whose `environmentId` is the canonical qualified scope, members whose `scopeId` names that organization, one unknown-kind scope, one damaged scope, one empty scope, the 59-member unscoped file, and three spellings of one organization | 6 of 6 and 59 of 59 members read and re-saved; every scope value verbatim; `schemaVersion` still 1; `kind` still `watchlist-store`; inclusion, provenance, active selection and environment profile intact; no empty scope filled in. On the mixed-spelling fixture the previous build **normalised** the braced upper-case GUID to the canonical spelling (two canonical, none braced, no member lost) - a change of spelling that keeps the same organization, not a loss of scope | `dotnet run -c Release --project %TEMP%\am443-compat\Am443Compat.csproj` on Windows 11, 2026-11-15 - the same harness re-pointed at a scratch `git worktree` at `b318416` | **Verified on Windows 11**: `COMPATIBILITY: PASS`, exit 0, before AM-44.3a's first qualified write. AM-44.3b must re-run it against whatever commit is then previous before re-keying a stored list |
+| The same round trip against commit `b318416` - the AM-44.2a build deployed on the primary host, and therefore the build a user still has installed when AM-44.3a writes its first qualified scope - using the shape AM-44.3a writes: a list whose `environmentId` is the canonical qualified scope, members whose `scopeId` names that organization, one unknown-kind scope, one damaged scope, one empty scope, the 59-member unscoped file, and three spellings of one organization | 6 of 6 and 59 of 59 members read and re-saved; every scope value verbatim; `schemaVersion` still 1; `kind` still `watchlist-store`; inclusion, provenance, active selection and environment profile intact; no empty scope filled in. On the mixed-spelling fixture the previous build **normalised** the braced upper-case GUID to the canonical spelling (two canonical, none braced, no member lost) - a change of spelling that keeps the same organization, not a loss of scope | `dotnet run -c Release --project %TEMP%\am443-compat\Am443Compat.csproj` on Windows 11, 2026-11-15 - the same harness re-pointed at a scratch `git worktree` at `b318416` | **Verified on Windows 11**: `COMPATIBILITY: PASS`, exit 0, before AM-44.3a's first qualified write. AM-44.3b re-ran the same harness the same day before re-keying anything, and against a file its own association wrote (next row) |
+| The file AM-44.3b's **own association path** wrote - the real 59-member unverified shape plus a second already-qualified list, associated through `WatchlistManager.AssociateScope` bound to a real `WatchlistAssociationPreview` and saved by the ordinary store - opens and re-saves on both earlier builds | Both builds: 61 of 61 members read and re-saved; the associated list keeps its qualified `environmentId` and all 59 members; the list that was not associated is unchanged; all 61 qualified member scopes verbatim and no empty scope filled in; `schemaVersion` still 1; `kind` still `watchlist-store`; 15 excluded members still excluded and 9 hand-added provenances intact; both environment profiles, their selections and their preferences identical before and after | `dotnet run --project %TEMP%\am443-compat\Am443Compat.csproj` (scratch worktree at `b318416`) and `dotnet run --project %TEMP%\am443-compat-head\Am443CompatHead.csproj` (scratch worktree at `40f60a5`, the AM-44.3a build) on Windows 11, 2026-11-15; the input was produced by `dotnet run --project %TEMP%\am443b-write\Am443bWrite.csproj` into an isolated directory under `%TEMP%`, never the operator's file | **Verified on Windows 11**: `COMPATIBILITY: PASS`, exit 0, on both builds, before AM-44.3b lifted the deferral. AC-30's condition still holds for a file this build re-keyed |
 
 ### Query shape actually issued (read-only)
 
@@ -438,7 +439,7 @@ construction, because they were the same confusion written twice:
 | A workflow id exists in this organization | A row carrying it, returned by a completed read that asked for it |
 | A workflow id is **absent** from this organization | A **completed, successful** read that asked for it and did not return it - and nothing else |
 | A workflow id is **unresolved** | Anything that left it unanswered: a refused or failed read, a read that stopped at a ceiling, an id never reached |
-| This list belongs to this organization | Every stored id confirmed by one completed read, plus the operator's confirmation - and applying it is deferred to AM-44.3 |
+| This list belongs to this organization | Every stored id confirmed by one completed read, plus the operator's confirmation of the preview that names that organization - and only through the association action |
 
 The counts therefore name five different things rather than two: members considered, ids this read could express as a
 query, ids actually placed in front of the platform, ids a completed read answered for, and ids it confirmed. A refused
@@ -454,7 +455,7 @@ byte-identical. **What a hit does not prove is stated in the report itself:** th
 not the same as this list having come from there - importing a solution preserves workflow ids - so the operator
 confirms and the tool never infers.
 
-**Applying the association is still deferred, for a different reason than it was.** When AM-44.2 shipped,
+**Applying the association was deferred when AM-44.2 shipped, for a reason AM-44.3a then removed.** When AM-44.2 shipped,
 `ScopeResolutionSupport.Shipped` answered "can this build resolve a qualified connected scope when it loads, lists and
 matches saved watchlists?" with no, and that answer was measured rather than assumed: `AutomationMonitorControl.EnvironmentScope`
 derived the connected scope from `ConnectionDetail.EnvironmentId` (empty on this connection) and discovery produced
@@ -463,14 +464,17 @@ unscoped flow identities, so re-keying a member then would have broken `Watchlis
 still be on disk and would have stopped working. **AM-44.3a removed that obstacle and no other.** The connected scope
 now comes from the organization a completed `WhoAmI` read named, discovery keys every row with it, a newly saved list is
 created under the scope the save resolved, and a stored qualified scope is resolved against the connected one wherever a
-list is listed, opened, matched or reconciled. The association action is still refused, and refused by name: re-keying a
-list the operator saved earlier waits until that resolution has been observed running inside XrmToolBox
-(`docs/roadmap.md`, section 3, item 10), and will then happen only on their confirmation. Sideways association is closed
+list is listed, opened, matched or reconciled. **AM-44.3b then opened the action, and only that action**: re-keying a
+list the operator saved earlier happens from its own labelled button, on an explicit confirmation of the preview the
+verification read produced, after a re-check that the organization still connected is the one that preview was verified
+against - so a confirmation given once the connection has changed or closed is refused and the file stays
+byte-identical. What remains unobserved is the runtime: `docs/roadmap.md` section 3, item 11 has not been reported and
+item 10 was reported only in part, and no agent has seen any of this run against a tenant. Sideways association is closed
 too, and is now tested in both directions: adding a flow whose scope is a qualified organization, or importing such
 flows, into a list whose environment was never verified is refused (`AssociationRequired`), and a flow that names one
 organization is never added to a list that names another - such a member stays visible and unresolved rather than being
 removed. Adopting a *legacy unqualified* scope still behaves as before. What a new save does write is the scope that
-save resolved; what an existing list keeps is exactly what it had, including nothing.
+save resolved; what an existing list keeps is exactly what it had, including nothing, until the operator confirms.
 
 **Answered against a tenant on 2026-11-15, by the maintainer.** The read has now run twice on that connection: the
 first run found the argument-shape defect recorded above, and the re-run on the corrected build confirmed the fix -
@@ -522,8 +526,9 @@ that, and nothing else:
   never borrows the connected name.
 
 What AM-44.3a does not do: re-key a list that is already stored, adopt a qualified scope from an "add a flow" click, or
-offer the association action. `ScopeResolutionSupport` still ships `Shipped`, and its deferral reason now names the
-unobserved runtime gate (`docs/roadmap.md`, section 3, item 10) rather than an inability this build has already fixed.
+offer the association action. `ScopeResolutionSupport` shipped `Shipped` in that build, and its deferral reason named the
+unobserved runtime gate (`docs/roadmap.md`, section 3, item 10) rather than an inability that build had already fixed.
+AM-44.3b, the same day, offered the action and lifted that gate - the sideways routes above are still closed.
 
 **Not verified by AM-44.3a.** No agent session connected to an environment, so none of this has been observed against a
 tenant: whether `WhoAmIResponse.OrganizationId` arrives as a `Guid` through the host's own assembly (AM-42's shape
@@ -531,6 +536,38 @@ observation says it does; this build has not read one), whether a qualified row 
 real platform, whether a discarded in-flight result behaves as described when a connection changes mid-read, and how
 the new environment wording sits on screen at 100 / 150 / 200 percent scaling with keyboard navigation. That is item
 10's checklist, and it is the maintainer's run.
+
+### Confirming the association (AM-44.3b, built 2026-11-15)
+
+What AM-44.2 built and held back, and what AM-44.3a made safe to reach, is now one operator action - and still only
+that action:
+
+- **One identity rule, in one place.** `ResourceScope.NamesSameEnvironment` answers "do these two stored scope strings
+  name the same environment?", canonicalising both where this build can and falling back to exact text where it cannot.
+  `WatchlistCatalog` (which lists, opens and names saved lists) and `ApplicationSettings` (which finds an environment's
+  settings profile) both call it. Before this pass each compared the strings itself, so a list whose stored scope used a
+  spelling the connected scope does not would have been listed under one environment, refused a name in another, and
+  silently lost its saved preferences under a third.
+- **The gate lifted on measurement.** `ScopeResolutionSupport` now ships `Resolvable`. The two things that made a
+  re-key dangerous were closed by evidence, not by argument: AM-44.3a's matching suite shows the monitoring path
+  resolves a qualified stored scope wherever a list is listed, opened, matched or reconciled, and the previous-build
+  round trip above was re-run against a file this build's own association wrote, on two earlier builds, before the flip.
+  The unit test that pinned the shipped refusal was inverted deliberately, because the contract it recorded is the one
+  this pass changed - and it is now the test that pins the shipped answer being the *permissive* one.
+- **Confirmation is bound to the connection that earned it.** `WatchlistManager.AssociateScope` takes the connected
+  scope the caller is acting against and refuses before a byte moves when it is not the scope the previewed read was
+  verified against. The interval between showing a preview and pressing Yes therefore cannot be closed by another
+  environment appearing in between, and a refusal leaves the catalog exactly as it was read.
+- **One button, one question.** *Associate saved list with connected organization* sits beside the read-only *Verify
+  saved list (diagnostic)* on the discovery toolbar, is enabled by the same selection rule, and is the only reachable
+  route to the apply path. A `No` writes nothing; a `Yes` writes once, and the store's own `watchlists.json.bak` stays
+  the rollback.
+
+**Not verified by AM-44.3b.** No agent session connected to an environment and none drove the plugin's UI: the button
+has not been seen to load, the preview has not been read on a screen, the refusal wordings have not been observed, and
+no confirmed association has been re-opened after an XrmToolBox restart. `docs/roadmap.md` section 3, item 11 is that
+checklist; item 10, for the resolution this action now depends on, was reported except for its mid-operation
+connection-switch step and its scaling / Tab-order detail, which the maintainer deferred by decision rather than passed.
 
 ### Decided here, and deliberately not
 

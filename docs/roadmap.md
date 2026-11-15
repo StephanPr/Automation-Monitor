@@ -40,7 +40,11 @@ the maintainer, and there is still no run grid.
 | Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 480 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix, 450 after the AM-35 probe rules, 480 after the AM-36 diagnostic hand-back) |
 | M1 solution and cloud-flow discovery | Implemented in core and gateway; **cast and projection defects confirmed live and fixed; the identity defect is fixed and a flow reached the probe on 2026-11-12** | Mapping and identity decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox; the flow read answered with 59 rows live but every one of them lost its id (AM-34); on 2026-11-12 a flow was selectable and probeable, so a flow row and its identity did reach the UI - the displayed row count and the identity-source tally are still unreported |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; still no run grid. The only run-history UI is the AM-35 diagnostic probe, whose result AM-36 made readable and copyable in the plugin itself and which answered on 2026-11-12 | Core decisions unit tested (480 tests, smoke `PASS`); the production run read has **never** been executed against a tenant; the AM-35 *diagnostic* read of the same table has (2026-11-12, one flow: the text filter returned 5 rows) - that proves the projected column shapes and the filter choice, not normalization, aggregation or display, and the result window is proven only by the maintainer's run |
-| M4 saved watchlists and settings | Core + **C5 disk storage** + **C6 minimal save/open wired into the discovery screen** (the `WatchlistManager` caller); the fuller Watchlists view is future; **AM-40 fixed the reload defect C6's first live run exposed** | Core layer (522 xUnit tests at C6, 539 now, incl. 38 real-filesystem adapter tests + the C6 wording and interrupted-rotation tests) and the net48 plugin compiles Release clean (0W/0E); deployed 2026-11-14 18:19 through `scripts\deploy.ps1` (Release, host closed) as ProductVersion `0.1.0+fcd2b28` - `Plugins\AutomationMonitor.Plugin.dll` 57856 B sha256 `f9a50382…1121`, `Plugins\AutomationMonitor.Core.dll` 186368 B sha256 `469c79af…32d8`, previous copies backed up to `PluginBackups\AutomationMonitor\20261114-181938`; no live save-reopen run yet. **Updated 2026-11-15 (AM-40):** a live save did happen and its file was audited - it loads cleanly - but the drop-down showed nothing, and that reload defect is fixed at L1-L3 (539 xUnit tests incl. 17 restart/read-state tests over a real temporary directory, failing on the old rule at exactly the two AM-40 assertions; net48 Release 0W/0E; smoke `PASS`). The save-close-reopen observation on screen is still owed by the maintainer. Redeployed 2026-11-15 11:19 with the host closed (`scripts\deploy.ps1`, exit 0) as ProductVersion `0.1.0+be935b0` - `Plugin.dll` 57856 B sha256 `E1C0F259…`, `Core.dll` 186880 B sha256 `C9C7EA82…`, both byte-identical to the build, prior copies backed up to `PluginBackups\AutomationMonitor\20261115-111910`; the operator's `watchlists.json` was re-hashed afterwards and is unchanged |
+| M4 saved watchlists and settings | Core + **C5 disk storage** + **C6 minimal save/open wired into the discovery screen** (the `WatchlistManager` caller); the fuller Watchlists view is future; **AM-40 fixed the reload defect C6's first live run exposed** | Core layer (522 xUnit tests at C6, 539 now, incl. 38 real-filesystem adapter tests + the C6 wording and interrupted-rotation tests) and the net48 plugin compiles Release clean (0W/0E); deployed 2026-11-14 18:19 through `scripts\deploy.ps1` (Release, host closed) as ProductVersion `0.1.0+fcd2b28` - `Plugins\AutomationMonitor.Plugin.dll` 57856 B sha256 `f9a50382…1121`, `Plugins\AutomationMonitor.Core.dll` 186368 B sha256 `469c79af…32d8`, previous copies backed up to `PluginBackups\AutomationMonitor\20261114-181938`; no live save-reopen run yet. **Updated 2026-11-15 (AM-40):** a live save did happen and its file was audited - it loads cleanly - but the drop-down showed nothing, and that reload defect is fixed at L1-L3 (539 xUnit tests incl. 17 restart/read-state tests over a real temporary directory, failing on the old rule at exactly the two AM-40 assertions; net48 Release 0W/0E; smoke `PASS`). The save-close-reopen observation on screen is still owed by the maintainer. Redeployed 2026-11-15 11:19 with the host closed (`scripts\deploy.ps1`, exit 0) as ProductVersion `0.1.0+be935b0` - `Plugin.dll` 57856 B sha256 `E1C0F259…`, `Core.dll` 186880 B sha256 `C9C7EA82…`, both byte-identical to the build, prior copies backed up to `PluginBackups\AutomationMonitor\20261115-111910`; the existing `watchlists.json` re-hashed afterwards as unchanged. **L4 observed 2026-11-15 on the primary
+host:** after that redeploy the saved watchlist is visible in the Saved drop-down and `Open` binds its 59
+stored members with no solution query, so C6's save-reopen-reload acceptance is met on screen. Not reported
+and therefore still open: closing and reopening the plugin tab separately from a host restart, and gate item 4
+(layout at 100/150/200 percent, keyboard navigation) |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -265,6 +269,32 @@ Nothing here approves a rewrite. The phase ends in a written recommendation.
 
 WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a shape, so the two reorganisations do not collide inside the same navigation host.
 
+### 5.7 WF-F - environment identity, then multi-environment watchlists
+
+Opened by AM-40's first live run, which found a saved watchlist whose scope, 59 member `scopeId`s and
+environment profile were all empty because the connection reported no environment id. The question is which
+value may name an environment inside a stored identity - a `WorkflowKey` decision, so it carries data-loss
+risk and needs its own evidence before any derivation changes.
+
+| ID | Scope | Host and gate | Status |
+|---|---|---|---|
+| AM-41 | Establish which environment identifiers this host and this SDK really expose, and whether an absent `ConnectionDetail.EnvironmentId` means no identity is reachable at all. | Assembly metadata, the restored NuGet packages, the host's application directory, Microsoft Learn, the connection library's own source; the operator's connection record read for element names only, never values | **Done 2026-11-15 as investigation, documentation only.** An absent `EnvironmentId` element in a *saved* connection does not prove the *running* client cannot supply an environment id; the facts and their limits are in `docs/provider-capabilities.md`. No persisted identity changed on this evidence |
+| AM-42 | Read-only identity probe of the active connection: for each candidate, report presence and shape - never the value. Candidates: `ConnectionDetail.EnvironmentId`, `CrmServiceClient.EnvironmentId` (reachable through `ConnectionDetail.ServiceClient`), `TenantId`, `OrganizationUrlName`, `OrganizationFriendlyName`, `ConnectionId`, and `WhoAmIResponse.OrganizationId` over the `IOrganizationService` the host already provides. Compare availability and consistency; state whether a Power Platform environment id is actually present at runtime. | Windows gate. It must not write or migrate any settings file, must not alter any `WorkflowKey`, and must not open or create a connection merely to read a property. Output is shape only (populated / kind / length / equality), so no tenant identifier can reach a log, an export or a commit | **Next implementation task. Not started** |
+| AM-43 | Multi-environment watchlists: one list holding workflows from several Dataverse environments, using XrmToolBox's multi-connection facilities, with per-environment coverage so one unreachable environment degrades its own source and never discards the others. The document format, how an environment set is represented, and what becomes of today's one-environment-per-list rule are **this checkpoint's design decisions, not AM-41's** | Core unit tests over faked per-environment sources; Windows gate with two environments | Later - blocked behind AM-42 |
+| AM-44 | Give the operator an explicit, verified way to attach a stored identity to a list saved while its scope was empty. Verification is required and the currently connected environment is never assigned automatically, because an empty scope means *unverified*, not "this environment" | Migration tests over a populated legacy file (the real shape is one list of 59 unscoped members) plus the Windows gate | Later - blocked behind AM-42 and AM-43 |
+| AM-45 | Independent Azure connection contexts, so a Logic Apps or APIM source is scoped to its own tenant and subscription instead of inheriting the Dataverse connection's identity | Spike, then provider contract tests | Later, with WF-C |
+
+Two rules come out of AM-41 and bind every checkpoint above.
+
+- **A Power Platform environment id and a Dataverse organization id are different identifiers.**
+  `WhoAmIResponse.OrganizationId` is the documented source of the organization identity and it is not the
+  environment id; `CrmServiceClient.EnvironmentId` is documented as the Power Platform environment id. Both
+  are preserved when both are known, each under its own identity kind, and one is never written into the
+  other's field.
+- **A connection is not an environment.** `ConnectionId` names one saved connection record, so two records
+  for one environment yield two values and re-creating a record yields a new one. Tenant id, friendly name,
+  URL name and service URL are context and display, never authoritative resource identity.
+
 ## 6. Sequence, dependencies and what stays paused
 
 1. WF-0 host parity: nothing on Windows can be measured before it.
@@ -281,12 +311,17 @@ WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a
    because the read state is now nullable and a usable read alone arms it. Next: the fuller Watchlists view
    (tab host, reconciliation preview, management), then the save-reopen-reload runtime gate on a live
    environment; C7 the full gate with an unchanged package audit and C8 the
-   documentation inventory follow. AM-41 is the environment-identity follow-up AM-40 opened: measure whether
-   any host-supplied identity is populated for a connection that reports no `EnvironmentId` before changing
-   scope derivation, because that change moves `WorkflowKey.ScopeId` for every stored member and needs its
-   own evidence and decision.
-5. WF-D: a dual WPF evaluation, which needs a working discovery path to have real rows to show.
-6. WF-E design direction, then WF-C Azure discovery, which is independent of the UI decision but
+   documentation inventory follow. AM-41 investigated the environment-identity follow-up AM-40 opened and is
+   recorded as section 5.7: the host does expose further identity sources, and a saved connection that carries
+   no `EnvironmentId` element does **not** prove the running client cannot supply an environment id, so nothing
+   is concluded about the operator's existing unscoped 59-member list until AM-42 measures live values read-only.
+   AM-43 carries the mandatory multi-environment watchlist capability and AM-44 the verified, never-automatic
+   re-identity of legacy unscoped lists.
+5. WF-F: identity first (AM-42), then multi-environment watchlists (AM-43), then the verified re-identity of
+   legacy unscoped lists (AM-44). No checkpoint on this track may move a stored `WorkflowKey.ScopeId` before
+   AM-42 has reported, because changing scope derivation re-keys every stored member.
+6. WF-D: a dual WPF evaluation, which needs a working discovery path to have real rows to show.
+7. WF-E design direction, then WF-C Azure discovery, which is independent of the UI decision but
    obeys the same spike-before-code rule.
 
 M4 is partly delivered, not obsolete. The core is committed at `a23f216`; the disk storage layer (C5) and its
@@ -313,6 +348,13 @@ is not exactly one object.
   column is not a blank cell - Dataverse refuses the whole query - so `DataverseSchema.WorkflowAttributes`
   is the one projection list, `DataverseSchemaTests` is its guard, and a gateway builds its `ColumnSet`
   from that list alone. Guessing at a schema name is a defect, not a hedge.
+- Environment identity is measured, never assumed, and never inferred from what a saved file happens to
+  contain. A Power Platform environment id, a Dataverse organization id, a tenant id, a connection id, a URL
+  name and a friendly name are six different things; only the first two may serve as resource identity, each
+  recorded under its own kind and neither written into the other's field. An empty scope means *unverified*:
+  it is not a value to match against, and it is never filled in with whatever environment happens to be
+  connected.
+
 - Identity never depends on a query flag. A `Distinct` query returns no primary key values (documented
   behaviour, and the cause of the 59 skipped rows on 2026-11-09), so the workflow projection names the
   table's documented primary id, `DataverseSchema.WorkflowQueryDistinct` is `false`, and both are pinned by

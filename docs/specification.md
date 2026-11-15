@@ -256,6 +256,21 @@ User flow:
 
 Potential extension: show APIM API/operation as **context metadata** alongside a mapped Logic App. Full APIM gateway request analytics are not required for the first APIM discovery implementation.
 
+### 6.6 Multi-environment watchlists (required capability, later milestone)
+
+A watchlist must be able to hold workflows from more than one Dataverse environment. This is a required product capability, not an option, and it is written down before any storage format exists so that no checkpoint mistakes today's single-environment shape for the intended final one.
+
+1. Member identity is already provider + environment + workflow id, so each member names its own environment. What must change is the list level, which today asserts exactly one environment and refuses a flow from another.
+2. Discovery, monitoring, reporting and export fan out over each member's own environment and report coverage **per environment**, so one unreachable, throttled or unauthorized environment degrades its own source and never discards or rolls back rows already collected from another.
+3. Connection handling uses XrmToolBox's own multi-connection facilities; plugin code never opens a second connection or builds a connection string.
+4. No operation silently targets the wrong environment: every result states the environments it actually covered.
+5. The design must later accommodate Azure Logic Apps and API Management with **independent Azure connection contexts** — their own tenant, subscription and session, not the Dataverse connection's identity.
+6. Portal deep links keep each workflow's own environment context.
+7. Adding an environment to a list must never require rewriting the identity of members already in it.
+8. A list whose environment is unverified stays unverified. Re-identification requires verification against the environment and explicit operator confirmation, and never assigns the currently connected environment automatically.
+9. Identity kinds are never conflated: a Power Platform environment id and a Dataverse organization id are different values, and a connection id, tenant id, friendly name or URL is not resource identity (see `docs/provider-capabilities.md`).
+10. The storage layout, schema version and migration format for a multi-environment list are **open design decisions** owned by AM-43 and AM-44 in `docs/roadmap.md`. This section states the capability, not its encoding.
+
 ---
 
 ## 7. Monitoring dashboard behavior
@@ -700,7 +715,8 @@ The final project/file layout can evolve. Dependencies should flow from UI → a
 |---|---|
 | `ProviderKind` | PowerAutomate / LogicAppsConsumption / LogicAppsStandard. |
 | `TenantId` | May be unknown for some Dataverse-only contexts. |
-| `EnvironmentId` | Power Platform environment, where applicable. |
+| `EnvironmentId` | Power Platform environment, where applicable. Supplied by the host, and **absent on some connection types** — see `docs/provider-capabilities.md`. |
+| `OrganizationId` | Dataverse organization identity, from `WhoAmIResponse.OrganizationId`. A different identifier from `EnvironmentId`: both are kept when both are known, each under its own identity kind, and neither is written into the other's field. |
 | `SubscriptionId` | Azure subscription, where applicable. |
 | `ResourceGroup` | Azure resource group, where applicable. |
 | `HostResourceId` | Azure ARM resource ID for a Standard host, where applicable. |
@@ -874,6 +890,16 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
 - A watchlist stored with no environment recorded is listed for every connection and the status line says it
   is not environment-scoped; a watchlist stored for one named environment is never listed in, or selectable
   for, another.
+- An empty scope is **unverified identity**, not a scope that can be matched or completed. Two connections
+  that both report no environment id may be two different environments, so a legacy unscoped list is never
+  re-keyed automatically to whatever environment is connected. Any future re-identification requires
+  verification against the environment plus explicit operator confirmation, keeps the previous file through the
+  normal backup path, and is proven by migration tests over a populated legacy file.
+- Scope derivation is not a display concern: `WorkflowKey.ScopeId` participates in every stored member key and
+  in `RunKey`, so substituting a newly available identity would re-key every stored member. No identity enters
+  it before its availability and stability have been measured live and written up in
+  `docs/provider-capabilities.md` (AM-42 in `docs/roadmap.md`).
+
 
 ### Packaging
 

@@ -117,16 +117,19 @@ names column behaviour and coverage - not tenant content.
    security-role advice, not an empty grid.
 5. Record whether `ConnectionDetail.EnvironmentId` is populated for every connection type
    (Office 365, on-premises, ADX); when it is not, flows are keyed unscoped and that must be
-   visible in the UI. **Answered for one connection type on 2026-11-15:** an Office 365 online
-   connection in XrmToolBox `1.2026.9.78` reported **no** environment id, and the plugin's own file showed
-   it (the saved watchlist, all of its members and the environment profile carried an empty scope).
-   Unscoped keying is therefore the ordinary state on at least this connection type, not an edge case: the
-   saved-watchlist line now says the lists are not environment-scoped, and
+   visible in the UI. **Partly answered on 2026-11-15, and the answer is narrower than it first looked:** an
+   Office 365 online connection in XrmToolBox `1.2026.9.78` reported **no** environment id, and the plugin's
+   own file showed it (the saved watchlist, all of its members and the environment profile carried an empty
+   scope). Unscoped keying is therefore the ordinary state on at least this connection type, not an edge
+   case: the saved-watchlist line now says the lists are not environment-scoped, and
    `WatchlistCatalog.ForEnvironment` shows unscoped lists everywhere so a list built in that state cannot
-   vanish. On-premises and ADX remain unrecorded. **Follow-up (AM-41 in `docs/roadmap.md`):** find a
-   populated identity for this connection type *before* changing scope derivation - substituting one would
-   make freshly discovered keys disagree with the `scopeId` already stored in members, which is a workflow
-   identity decision needing its own evidence and migration answer.
+   vanish. **This is not proof that no environment id is reachable.** The empty value was read from the
+   plugin's own *saved* `ConnectionDetail`, and the connection library assigns `EnvironmentId` from the
+   connector client it built rather than storing a value the environment reported, so a missing element in the
+   saved record says nothing about `CrmServiceClient.EnvironmentId` on the live client. On-premises and ADX
+   remain unrecorded and the live-client question is AM-42's. An earlier conclusion here that no stable
+   environment identity is available to this build was drawn from the saved file alone and is withdrawn; see
+   the environment-identity section below.
 
 #### Recorded answers — first live session, 2026-11-09 (maintainer-reported)
 
@@ -156,6 +159,80 @@ question and the `category = 5` question from one diagnostic instead of another 
 So the line exists but no file holds it unless the operator raises Settings → log level first. The probe result
 no longer depends on that (it is shown in its own window); the discovery diagnostic does, and closing that gap is
 roadmap item WF-A.9 rather than a reason to widen the status line.
+
+## Environment identity — which value may name an environment (AM-41, measured 2026-11-15)
+
+A watchlist is opened through one connection, so a saved list must say which environment its members live
+in: a flow stored under one environment id cannot be queried through a connection to another, and the
+operator would read the resulting empty grid as "no runs" rather than "wrong environment". That is what makes
+an *empty* scope dangerous rather than merely untidy — two connections that both report no environment id look
+identical while they may be two different environments. An empty scope is therefore recorded as
+**unverified identity**, never as a scope that can be matched against, merged with, or filled in from
+whatever environment happens to be connected.
+
+### What the host and the SDK expose (every row measured on this host)
+
+Property presence was established by reading assembly metadata (the accessor name in the metadata string
+heap); versions by reading the deployed and restored binaries themselves.
+
+| Fact | Evidence |
+|---|---|
+| The host's application directory is `C:\Users\Stephan\Desktop\XrmToolbox` (`XrmToolBox.exe` ProductVersion `1.2026.9.78`). `%APPDATA%\MscrmTools\XrmToolBox\1.2026.9.78` is the **storage** root and holds no host binaries, so host versions cannot be inspected there | Directory reads 2026-11-15 |
+| `McTools.Xrm.Connection.dll` deployed by the host is ProductVersion and FileVersion `1.2025.9.64` — the version the plugin compiles against | Deployed binary `VersionInfo`, versus the plugin's `PackageReference` |
+| `ConnectionDetail` exposes `EnvironmentId`, `EnvironmentText`, `TenantId`, `ConnectionId`, `Organization`, `OrganizationUrlName`, `OrganizationFriendlyName`, `OrganizationServiceUrl`, `OrganizationDataServiceUrl`, `OrganizationVersion`, `ServerName`, `OriginalUrl`, `WebApplicationUrl` and `ServiceClient` | Accessors `get_EnvironmentId`, `get_TenantId`, `get_ConnectionId`, `get_OrganizationUrlName`, `get_ServiceClient` … present in both the restored and the deployed assembly |
+| `ConnectionDetail` exposes **no organization id**, so the organization the connection talks to is not derivable from the connection object alone | No `get_OrganizationId` accessor in that assembly's metadata |
+| The connector documents `EnvironmentId` as the Power Platform environment id: *"Gets the PowerPlatform Environment Id of the environment that is hosting this instance of CDS"* | Microsoft Learn, `Microsoft.Xrm.Tooling.Connector.CrmServiceClient.EnvironmentId` (package `Microsoft.CrmSdk.XrmTooling.CoreAssembly` v9.1.1.65) |
+| `WhoAmIResponse` returns `OrganizationId`, `BusinessUnitId` and `UserId` — and **no** environment id | Microsoft Learn, `WhoAmIResponse` properties; these types ship in `Microsoft.Crm.Sdk.Proxy.dll` |
+| The deployed `Microsoft.Xrm.Tooling.Connector.dll` is ProductVersion `4.0.0.188+gf6ab2d7` and carries `get_EnvironmentId`; the restored `Microsoft.CrmSdk.XrmTooling.CoreAssembly` 9.1.1.65 is the **same** ProductVersion, and it reaches the plugin transitively through `XrmToolBoxPackage` 1.2025.10.74 — so the property is compilable against and present at runtime with no new dependency | Binary `VersionInfo` and metadata scan of both copies; `obj/project.assets.json` |
+| The deployed `Microsoft.Crm.Sdk.Proxy.dll` is ProductVersion `9.2.49.14828` | Binary `VersionInfo` |
+| The operator's saved connection record carries **no `EnvironmentId` element at all**, while `TenantId`, `Organization`, `OrganizationFriendlyName`, `OrganizationUrlName`, `OrganizationServiceUrl`, `OrganizationDataServiceUrl`, `OrganizationVersion`, `OriginalUrl`, `WebApplicationUrl`, `ServerName` and `ConnectionId` are present | Element names of `Connections\ConnectionsList.Default.xml`, read for names and emptiness only. No connection value was read, copied or recorded, and the file was not modified |
+| That one empty value drives the whole identity chain, which is why discovery reads `unknown environment`: `ConnectionDetail.EnvironmentId` → `DataverseGateway.EnvironmentId` → `DataverseSolutionFlowSource` → `DataverseCloudFlowSelector.Select(…, environmentId)` → `WorkflowKey.TryCreate(PowerAutomate, environmentId, id)` → `WorkflowReference.EnvironmentId`, which **is** `Key.ScopeId` | Read of the call path; AM-40's file audit proved the stored consequence |
+
+### The identifiers, and why they are never interchangeable
+
+| Identity kind | Where it comes from | What it names |
+|---|---|---|
+| Power Platform environment id | `ConnectionDetail.EnvironmentId`, which the connection library assigns from `CrmServiceClient.EnvironmentId` on the client it built | The admin-plane environment hosting this Dataverse environment |
+| Dataverse organization id | `WhoAmIRequest` → `WhoAmIResponse.OrganizationId`, executed on the `IOrganizationService` the host already owns | The Dataverse organization the connection is talking to. Authoritative for *organization* identity, and **not** a Power Platform environment id |
+| Context, never identity | `TenantId`, `OrganizationUrlName`, `OrganizationFriendlyName`, `OrganizationServiceUrl`, `OriginalUrl`, `WebApplicationUrl`, `ServerName` | Display, provenance and mismatch detection. None is unique or stable enough to key a resource on |
+| Connection identity | `ConnectionId` | One saved connection record on one workstation. Two records can point at one environment and re-creating a record produces a new value, so it must never enter stored workflow identity |
+
+Both of the first two are preserved when both are known, each tagged with its own identity kind; one is never
+written into the other's field. The second is the documented candidate for **authoritative Dataverse
+organization identity**, and the only route to it that needs nothing beyond the connection the host already
+owns.
+
+### What AM-41 concludes, and what it refuses to conclude
+
+It concludes a narrow fact: the saved connection record for this connection type carries no environment id,
+and unscoped keying is the ordinary state there. It does **not** conclude that no identity is reachable — the
+live client was never queried, and reading a saved record cannot answer a question about a running client.
+
+Substituting any identity into scope derivation is not a display change. `WorkflowKey.ScopeId` participates in
+every stored member key and in `RunKey`, so a fresh identity that disagrees with the 59 stored empty-scope
+members would silently orphan a list already proven to load correctly. The operator's existing watchlist
+therefore stays byte-for-byte as it is, and its empty scope stays *unverified* rather than being taken as
+globally valid or as a match for the currently connected environment.
+
+AM-42 answers the open questions read-only (see `docs/roadmap.md` section 5.7): what each candidate reports on
+the **active** connection, whether `CrmServiceClient.EnvironmentId` is populated at runtime, whether it agrees
+with `WhoAmIResponse.OrganizationId`, and whether the two ever conflict. Multi-environment watchlists are a
+required later capability and are specified in `docs/specification.md`; their storage format, schema version
+and migration shape are deliberately **not** decided by this investigation.
+
+### Not verified by AM-41
+
+- Whether `ConnectionDetail.ServiceClient` hands back an already-connected client or builds one. A plugin must
+  never start a sign-in or open a second connection merely to read a property; the connection library's
+  `ConnectionDetail.cs` fetch truncated mid-file, so its lazy-initialisation behaviour is unconfirmed and must
+  be read before that property is touched.
+- Whether `CrmServiceClient.EnvironmentId` is populated for this connection type, or whether it agrees with
+  anything else. No identifier value was observed, recorded or compared by this investigation.
+- Whether the Dataverse `organization` table exposes an environment id column. Learn's `organization`
+  reference exceeds the fetch limit (287 KB, truncated at 50 KB) so it was not verified — and a wrong column
+  name makes `RetrieveMultiple` refuse the **whole** query (the `primarycategory` class), so it may only be
+  measured one candidate column per isolated query.
+- On-premises and ADX connections remain unrecorded for every identity field above.
 
 ## Power Automate run history (`flowrun`) — M3
 

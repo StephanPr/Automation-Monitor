@@ -352,9 +352,10 @@ own persistence code: the qualified/unknown-kind/damaged fixture came back with 
 written back verbatim; the real 59-member unscoped shape kept 59 members, 45 included and 14 excluded, 8 hand-added
 provenances, its active selection, its environment profile and its preferences, and its empty scopes stayed empty; the
 mixed-spelling fixture kept its one canonical value. Nothing bumped `schemaVersion`, refused the file, or moved a
-member. The stop condition did not trigger, so version 1 stands and no compatibility barrier is needed. AM-44.2 must
-re-run the harness before it writes a qualified scope from the running plugin, because the previous build to compare
-against is then a later commit.
+member. The stop condition did not trigger, so version 1 stands and no compatibility barrier is needed. AM-44.2 shipped
+without writing any qualified scope from the running plugin - applying an association is deferred (see below) - so no
+re-run was owed for it; **AM-44.3 must re-run the harness against whatever commit is then the previous release before
+its derivation flip lets the shipped path write its first qualified scope**, because the build to compare against moves.
 
 ### Display identity is separate from key identity
 
@@ -369,6 +370,57 @@ or a comparison, and no friendly name, url or display name is ever used in it â€
 why they are context and not identity in the table above. Raw identifiers stay out of status lines, logs and exports:
 `DiscoveryRows` used to print the scope verbatim, which is the shape this rule forbids, and AM-44.1 routed that column
 through the label. `ResourceScopeLabelTests` asserts that no label carries a whole identifier in any state.
+
+### Verifying a stored list against the connected organization (AM-44.2, built 2026-11-15)
+
+The identity source is the one AM-42 proved reachable: one `WhoAmIRequest` on the service the host already connected,
+read by `DataverseOrganizationIdentity`. Unlike AM-42's probe - whose result types hold shapes and cannot carry a value -
+this read must return the `OrganizationId`, because a qualified scope can only be authored from a real identifier. The
+value exists in exactly one place, is never logged, never shown, and never stored outside `ResourceScope`; every report
+renders `ResourceScopeLabel`'s fingerprint instead. It is compared with no other identifier: the organization id and
+`ConnectionDetail.EnvironmentId` / `CrmServiceClient.EnvironmentId` are different kinds (section above), and AM-42
+measured both of those as *not stated* on the maintainer's connection, which is why the organization id is the only
+route to a qualified scope here.
+
+The verification read asks one question - does this organization hold the workflow ids this saved list carries - and it
+is bounded because it runs against a live tenant on an operator's click:
+
+| Bound | Value | Whose decision it is |
+|---|---|---|
+| Ids per request | 20 | this tool's, not a platform limit |
+| Requests per verification | 12 (so 240 ids maximum) | this tool's; a bigger list is refused before any request |
+| Pages per request | 4, 50 rows per page, 500 rows in total | this tool's; a source that keeps promising pages stops the read and it reports `Incomplete` |
+| Projection | `workflowid` only, `Distinct = false`, ordered by `workflowid` | the platform's rule that a projected column must exist (`primarycategory`) and that a distinct query returns no primary keys (AM-34) |
+| Filter | `ConditionOperator.In` over Guid values | documented operator ("the value exists in a list of values"); no undocumented endpoint |
+| Messages | `RetrieveMultiple` plus the one already-approved `WhoAmIRequest` | read-only by construction; no other `Execute` message is approved |
+
+Rows become identity through the same `WorkflowIdentity.TryResolve` rule discovery uses, so a row whose projected column
+and row id disagree is counted as unusable rather than guessed, and any row that arrives with an id the read never asked
+about makes the whole answer `Incomplete`: a response that contradicts its own filter is not evidence.
+
+Ten evidence classes come out of the read, and only `Verified` - a completed read that found every stored member id -
+supports attaching an identity. Partially resolved, unresolved, nothing to verify, incomplete, unauthorized, unavailable,
+unsupported and no-connected-organization each refuse, each with its own wording, and each leaves the saved file
+byte-identical. **What a hit does not prove is stated in the report itself:** the organization holds those ids, which is
+not the same as this list having come from there - importing a solution preserves workflow ids - so the operator
+confirms and the tool never infers.
+
+**Applying the association is deferred in this build, by design.** `ScopeResolutionSupport.Shipped` answers "can this
+build resolve a qualified connected scope when it loads, lists and matches saved watchlists?" with no, so a confirmed
+association is previewed and then refused with that reason and `AM-44.3` named. The reason is measured, not imagined:
+`AutomationMonitorControl.EnvironmentScope` derives the connected scope from `ConnectionDetail.EnvironmentId` (empty on
+this connection) and discovery produces unscoped flow identities, so re-keying a member today would break
+`Watchlist.FindMember`, the builder's `Key.Canonical` index, reconciliation, include/exclude/remove by key and the
+add-a-flow scope check - the list would still be on disk and would stop working. Sideways association is closed too:
+adding a flow whose scope is a qualified organization, or importing such flows, into a list whose environment was never
+verified is refused (`AssociationRequired`); adopting a *legacy unqualified* scope still behaves as before.
+
+**Not verified by AM-44.2.** The read has never run against a tenant: no agent session connects, so whether a batch
+`In` filter over `workflowid` is accepted and whether the projected column arrives as a `Guid` on the real platform is
+first-hand-untested until the maintainer runs the read-only action and pastes back the copyable block
+(`docs/roadmap.md` section 3, item 9). The Core logic, the ceilings, the classifications and the file behaviour are
+proved by 52 unit tests on both hosts' automation; the plugin compile is proved; loading the button and the answer the
+environment gives are not.
 
 ### Decided here, and deliberately not
 

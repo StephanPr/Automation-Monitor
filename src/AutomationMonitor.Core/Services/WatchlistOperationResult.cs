@@ -47,7 +47,26 @@ namespace AutomationMonitor.Core.Services
         /// The loaded file holds content this build cannot represent, so no list may be changed from it: an
         /// edit could only be saved by rewriting the file without the content the read left out.
         /// </summary>
-        UnreadableContent = 10
+        UnreadableContent = 10,
+
+        /// <summary>
+        /// An environment identity may not be attached to this list, and the reason is one the operator can act
+        /// on: the evidence did not say enough, the list already names another organization, or its members
+        /// already carry recorded scopes.
+        /// </summary>
+        AssociationRefused = 11,
+
+        /// <summary>
+        /// The association is understood and previewed, but this build must not re-key a saved list yet because
+        /// it cannot resolve that scope when it loads and matches watchlists. Nothing was changed.
+        /// </summary>
+        AssociationDeferred = 12,
+
+        /// <summary>
+        /// A flow whose scope is a verified organization cannot join a list whose environment was never
+        /// verified: that would attach an identity to the list without the operator having chosen to.
+        /// </summary>
+        AssociationRequired = 13
     }
 
     /// <summary>The result of one watchlist mutation, with the catalog as it now stands.</summary>
@@ -144,6 +163,15 @@ namespace AutomationMonitor.Core.Services
                     break;
                 case WatchlistOperationOutcome.UnreadableContent:
                     text.Append("NOTHING WAS CHANGED - the saved file holds content this version cannot read");
+                    break;
+                case WatchlistOperationOutcome.AssociationRefused:
+                    text.Append("NOTHING WAS CHANGED - this watchlist was not associated with that environment");
+                    break;
+                case WatchlistOperationOutcome.AssociationDeferred:
+                    text.Append("NOTHING WAS CHANGED - associating a saved list with an environment is not enabled in this version");
+                    break;
+                case WatchlistOperationOutcome.AssociationRequired:
+                    text.Append("NOTHING WAS CHANGED - this saved list has no verified environment yet");
                     break;
                 case WatchlistOperationOutcome.StorageRefused:
                     text.Append("NOTHING WAS SAVED - the settings file could not be read");

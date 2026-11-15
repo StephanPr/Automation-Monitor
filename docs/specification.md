@@ -929,15 +929,17 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
   build without a member for it would discard the value on its next save. If the round trip fails, versioning is
   revisited before any write.
 - Anything a build cannot interpret must not be destroyed by it. A member whose stored scope the reader does not
-  recognise is written back unchanged or the list is refused for modification. Today a member whose `provider` token
-  is unknown is skipped on read, which means the next save from that build would drop it; closing that gap is part of
-  the identity checkpoint, not an accepted behaviour.
+  recognise is written back unchanged or the list is refused for modification. A member whose `provider` token is unknown
+  is no longer quietly dropped: it is tallied as content this build cannot represent, the list still opens, and any save
+  or mutation is refused until the file is readable again or the operator explicitly replaces it.
 - Scope derivation is not a display concern: `WorkflowKey.ScopeId` participates in every stored member key and
   in `RunKey`, so changing what the plugin puts there re-keys every stored member. The Dataverse identity source is
   decided — the organization id from the authenticated `WhoAmIRequest` — but derivation itself stays as it is until
   that re-key has been confirmed by the operator. Adding a flow whose scope is known to a list whose scope is not
   must not associate the list silently: same-scope handling stays as it is, and moving a list from unverified to a
-  named scope happens only through the confirmed action above.
+  named scope happens only through the confirmed action above. That action is itself **deferred** while the plugin
+  cannot resolve a qualified scope when it loads, lists and matches saved watchlists - see AC-35 - because a stored
+  list naming an identity the monitoring path cannot match is a list the operator has lost.
 
 
 ### Packaging
@@ -1066,6 +1068,12 @@ Only after explicit redesign and risk review: enable/disable workflows, cancel r
 - **AC-29:** A member whose stored scope or provider this build cannot interpret survives its next save unchanged, or the list is refused for modification. No test may assert that such a member is dropped.
 - **AC-30:** The previously released build reads a file carrying kind-qualified scopes and writes the same scope text back. If it parses the value but changes or loses it, the version-1 plan is revisited before any scope is written.
 - **AC-31:** The same workflow id under two different organization scopes remains two members with two run streams, and neither merges with an unscoped member holding the same id.
+- **AC-32:** Verifying a stored list against the connected organization is a bounded, read-only read (a fixed number of ids per request, a fixed number of requests, pages and rows) and its outcome is one named evidence class: verified, partially resolved, unresolved, nothing to verify, incomplete, unauthorized, unavailable, unsupported, or no connected organization. Only **verified** - every stored member id found by a read that ran to the end - may support attaching an identity.
+- **AC-33:** The action shows a preview before anything changes: which members would be re-keyed, that ids, names, inclusion, provenance, mode, preferences and coverage do not move, that other lists and other environments are untouched, and that a save first keeps `watchlists.json.bak`. A confirmation applies exactly the previewed plan; if the list or the evidence has moved since, the action is refused and the file is unchanged.
+- **AC-34:** Association attaches an identity only to members whose environment was never recorded. A member carrying any other recorded scope - another organization, a legacy bare id, an unknown kind or a damaged value - refuses the whole action rather than leaving half a list re-keyed, and a list that already names a different organization is never moved. Asking again for an identity the list already carries reports no change and dirties nothing.
+- **AC-35:** While the build cannot resolve a qualified scope when it loads and matches saved watchlists, applying an association is **deferred**: the refusal says why and names the checkpoint that lifts it, nothing changes in memory, and the file stays byte-identical. No other path may reach the same result sideways: adding a flow whose scope is a verified organization to a list whose environment was never verified, or importing such flows into it, is refused with the action the operator has to take instead.
+- **AC-36:** Once derivation is flipped, a newly discovered flow's identity carries the verified organization scope, and the environment shown to the operator is a friendly label beside the fingerprint. A display name, URL name or friendly name never participates in a workflow key, a run key, a merge, a cache key or a query filter - presentation only, always.
+- **AC-37:** An unverified stored member is reported as *not matched by this read*, never as absent. A list that is merely unreadable, unauthorized or empty must never be presented as a list whose flows have gone.
 
 ---
 

@@ -20,8 +20,18 @@ is now in Core** - the `dataverse-organization:<canonical-guid>` grammar with GU
 keep a recognized token apart from a connected or associated one, one scope label that carries no identifier, the rule
 that content this build cannot represent can never be dropped by a later save, and the previous-build round-trip proof
 that settles `schemaVersion` at 1 (`COMPATIBILITY: PASS`, recorded in `docs/provider-capabilities.md`). It writes no
-scope value from the running plugin, re-keys no member and changes no discovery identity; AM-44.2 and AM-44.3 stay
-unstarted.
+scope value from the running plugin, re-keys no member and changes no discovery identity.
+**AM-44.2 is done (2026-11-15): the verification read, the evidence and the association exist - applying them is held
+back on purpose.** A saved list can now be checked against the organization the connection is authenticated against
+(one bounded read-only query per batch of ids, ten evidence classes, only `Verified` licensing anything), and the
+association it produces is previewed with what changes and what cannot, bound to the exact preview the operator
+confirmed, refused on any weaker answer, inert when repeated and undoable from the `watchlists.json.bak` the save
+keeps. **Re-keying a stored list stays deferred in this build**: the plugin cannot yet resolve a qualified scope when
+it loads, lists and matches saved watchlists, so a re-keyed 59-member list would name an identity its own monitoring
+path cannot match. `ScopeResolutionSupport` states that deferral and names AM-44.3 as the checkpoint that lifts it, and
+neither adding a flow nor importing a solution can attach a qualified scope to an unverified list. 684 Core unit tests
+(52 new), the smoke run and the `net48` Release build are green on Windows 11; every file case ran on an isolated copy
+under `%TEMP%` and the operator's `watchlists.json` is untouched. AM-44.3 is unstarted.
 
 Earlier (2026-11-15): **AM-43 recorded as a design decision, documentation only.** The canonical Dataverse
 resource scope, the four identity states that keep "recognized", "connected" and "associated" apart, the safeguards on
@@ -147,6 +157,16 @@ Windows session records:
    stays open for this build too. The probe does not need re-running: a new run would need a new technical
    requirement, such as a different connection type or an on-premises or ADX environment, neither of which is
    concluded about by this single observation.
+9. for the AM-44.2 saved-list check, the same copyable window: pick a saved watchlist in the **Saved** box, press
+   "Verify saved list (diagnostic)" and paste back the whole block. It carries the connected organization as a
+   fingerprint, the verdict of the bounded identity read, the counts (members considered, ids asked about, found, not
+   found, rows with no usable id, reads / pages / rows) and the association preview with its decision - by construction
+   no workflow id, no organization value, no flow name and no provider message, so it is safe to paste verbatim. What
+   is wanted: how many stored ids the organization confirmed, and that the decision line reads
+   `DEFERRED ... AM-44.3` on this build (a `REFUSED` line is also a correct answer and names its blocker). The action
+   writes nothing and the plugin offers no way to apply the association yet, so the file must be unchanged afterwards;
+   report too where the third diagnostic button sits at 100 / 150 / 200 percent scaling and whether Tab reaches it in
+   row order, which is item 4 for this build.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -325,8 +345,8 @@ risk and needs its own evidence before any derivation changes.
 | AM-43 | **Design half - done 2026-11-15, documentation only:** the canonical Dataverse resource scope (`dataverse-organization:<canonical-guid>` written into the `scopeId` and `environmentId` fields that already exist), the four states - unverified, recognized, connected, associated - that keep a parseable token from being called proof, the safeguards on attaching an identity to a legacy unscoped list, the rule that an uninterpretable scope is preserved rather than dropped, and the condition on which `schemaVersion` stays 1. **Build half - later:** multi-environment watchlists: one list holding workflows from several Dataverse environments, using XrmToolBox's multi-connection facilities, with per-environment coverage so one unreachable environment degrades its own source and never discards the others | Design: the contract recorded in `docs/provider-capabilities.md` and acceptance criteria AC-25 to AC-31 in `docs/specification.md`; no code, no file, no schema change in this half. Build: Core unit tests over faked per-environment sources; Windows gate with two environments | **Design done 2026-11-15.** Build later, after AM-44.1 to 44.3, and it needs a second environment to prove. Whether one list may hold several organizations, how the Saved list filters such a list, and how it serializes stay **open** decisions of that build, not approved here |
 | AM-44 | Give the operator an explicit, evidence-backed way to attach a recognized identity to a list saved while its scope was empty - and only after that, let derivation produce one. Sequencing approved 2026-11-15: this track lands **before** multi-environment connection management, because all three of its checkpoints are provable with a single environment while AM-43's build is not | See AM-44.1 to 44.3 below | **AM-44.1 done 2026-11-15; AM-44.2 is next.** AM-44.3's wait on AM-42's reported answer is closed - the maintainer reported that read on 2026-11-15 - so nothing blocks the rest of the track but its own order |
 | AM-44.1 | The identity contract with **no behaviour change**: the scope token grammar and its canonicalisation (a qualified scope must collapse GUID spellings the way `CanonicalId.Identifier` does for workflow ids - `CanonicalId.Text`, applied to the scope today, only trims and lower-cases); a display label resolved without ever keying on a name or url; the parsed scope exposed to `Watchlist` and `RunKey` consumers; a scope this build cannot interpret preserved on save; and the unknown-`provider` member replaced by a refusal to modify rather than a silent skip. **Writes no value: every stored scope stays empty** | xUnit over a populated legacy fixture - grammar, GUID spellings, unknown-scope preservation, unscoped-vs-scoped inequality, label wording - plus the **previous-build round-trip proof** of AC-30 in a scratch `git worktree`: if the older build parses a qualified scope and rewrites or loses it, stop and revisit versioning before anything writes. Core build, whole smoke run, `net48` Release 0W/0E; Windows gate for how the label renders | **Done 2026-11-15.** 632 Core unit tests, the smoke run and the `net48` Release build (0 errors) are green on Windows 11, and the previous-build round trip passed, so `schemaVersion` stays 1. How the label renders inside XrmToolBox is the one part still waiting on section 3, item 4 |
-| AM-44.2 | The operator action, single-environment: read the connected organization through the read-only seam AM-42 proved, verify the stored member ids with a **completed** read, show a preview that says what changes and what cannot, apply only on explicit confirmation, and move that environment's active selection in the same write. Refuse on partial, unauthorized, unavailable or unresolved evidence, on a list already associated with a different organization, and when the connection reports no organization id. A workflow-id hit is evidence about that id, never proof of where the list came from - a solution import preserves ids - and the 59-member list is never migrated automatically | Migration tests over a populated copy of the real legacy shape, covering AC-25 to AC-29: byte-identical refusal, idempotent re-apply, selection moved atomically, recovery from `watchlists.json.bak`; then the maintainer's own run against that list | Later - after 44.1 |
-| AM-44.3 | Flip derivation so discovery produces qualified scopes, and gate the add-a-flow-to-list path so it can never associate an unverified list (existing same-scope behaviour preserved). Report mixed verified and unverified membership honestly: an unverified stored member is not matched by a scoped read, and must not read as "no longer in the environment" | Reconciliation and de-duplication tests proving no silent re-key of a stored list, then the Windows gate | Later - after 44.2; its wait on AM-42's answer closed when that read was recorded on 2026-11-15 |
+| AM-44.2 | The operator action, single-environment: read the connected organization through the read-only seam AM-42 proved, verify the stored member ids with a **completed** read, show a preview that says what changes and what cannot, apply only on explicit confirmation, and move that environment's active selection in the same write. Refuse on partial, unauthorized, unavailable or unresolved evidence, on a list already associated with a different organization, and when the connection reports no organization id. A workflow-id hit is evidence about that id, never proof of where the list came from - a solution import preserves ids - and the 59-member list is never migrated automatically | **Done 2026-11-15 - Core logic proved, `net48` build clean, applying it gated off.** `DataverseWorkflowIdentityProbe` (bounded: 20 ids per read, 12 reads, 4 pages per read, 500 rows, one projected column, never distinct) over `IWorkflowIdentityRowSource`, ten evidence classes of which only `Verified` licenses anything, `WatchlistAssociationPlanner` preview, `WatchlistManager.AssociateScope` bound to the exact preview that was shown, refusals for weak evidence / another organization / any member whose scope is already recorded / a file this build cannot write back, inert re-apply, selection and environment profile moved in one write, recovery proven from `watchlists.json.bak`. **The maintainer's sequencing rule is implemented as `ScopeResolutionSupport.Shipped`: re-keying a stored list is deferred until AM-44.3 can resolve the qualified scope on load and match, and neither adding a flow nor importing a solution may attach a qualified scope to an unverified list.** 684 Core unit tests (52 new), the smoke run and the Release build green on Windows 11; every file case ran against an isolated copy of the 59-member legacy shape under `%TEMP%`, never the operator's file | The maintainer's run of the read-only action (section 3, item 9), including item 4 for the third diagnostic button; nothing else on this checkpoint stays open |
+| AM-44.3 | **Integration requirements (what has to change, in this order).** (1) Resolve the connected scope: the plugin derives its environment scope from the organization id `DataverseOrganizationIdentity` already reads - `AutomationMonitorControl.EnvironmentScope` and the gateway's scope for discovered flows - and never from `ConnectionDetail.EnvironmentId`, which AM-42 measured as *not stated* on this connection. (2) Derive qualified identities: discovery produces `WorkflowKey`s whose scope is `dataverse-organization:<canonical-guid>`; the run-history query keeps filtering on the text `workflowid` column it was proven against. (3) Match stored against connected scope: `WatchlistCatalog.ForEnvironment` / `ActiveWatchlistFor`, `Watchlist.FindMember`, `SetIncluded` / `RemoveWorkflow` / `AddWorkflow`, `MembershipReconciler` and preference/profile lookup resolve a stored qualified scope against the connected one instead of relying on textual equality alone, and a stored member whose scope is *unverified* stays visible and is reported as **not matched by this read**, never as "no longer in the environment". (4) Presentation: the Environment column and the watchlist lines show a friendly environment label beside the fingerprint; a display name, URL name or friendly name never enters a `WorkflowKey`, a `RunKey`, a merge, a cache key or a query filter. (5) Only then may `ScopeResolutionSupport` change from `Shipped` to `Resolvable()`, and the same commit must update the test that pins the shipped answer plus AM-44.2's file-level deferral cases. Adding a flow and importing a solution stay gated as AM-44.2 left them | **Acceptance criteria.** AC-32 to AC-37 in `docs/specification.md` all pass; a stored list qualified to the connected organization is listed, opened, monitored and matched (a regression suite that would fail if step 3 were skipped - that is the gate this checkpoint exists to close); an unscoped stored member is reported as unmatched rather than absent; no path re-keys a stored list without the operator's confirmed association (no silent re-key in reconciliation or de-duplication); a test asserts a display name cannot reach any identity key; the friendly label is asserted as wording only; the AM-44.1 previous-build compatibility harness is re-run against whatever commit is then the previous release and must pass **before** the shipped path writes its first qualified scope, otherwise stop and revisit versioning; then the Windows gate - the maintainer re-opens their 59-member list, sees it in the Saved box with its members intact, discovers flows that carry the qualified scope, and reports the environment column, the scaling at 100/150/200 percent and keyboard navigation | Next; the only checkpoint allowed to lift the deferral. Its wait on AM-42 closed when that read was recorded on 2026-11-15 |
 | AM-45 | Independent Azure connection contexts, so a Logic Apps or APIM source is scoped to its own tenant and subscription instead of inheriting the Dataverse connection's identity | Spike, then provider contract tests | Later, with WF-C |
 
 Five rules come out of AM-41, AM-42 and AM-43 and bind every checkpoint above.
@@ -348,7 +368,9 @@ Five rules come out of AM-41, AM-42 and AM-43 and bind every checkpoint above.
   to an unknown `provider` token, which today is preserved on read and blocks the save instead of vanishing on it.
 - **Association is never automatic.** Adding a flow whose scope is known to a list whose scope is not must not
   re-key the list; same-scope handling stays as it is, and moving from unverified to a named scope happens only
-  through the confirmed action of AM-44.2. Storing a qualified scope is a change of value inside existing fields and
+  through the confirmed action of AM-44.2 - which is itself deferred until AM-44.3 can resolve a qualified scope when
+  it loads, lists and matches saved watchlists, because a stored list that names an identity the monitoring path
+  cannot match is a list the operator has lost. Storing a qualified scope is a change of value inside existing fields and
   keeps `schemaVersion` 1 **only while the previous build's read-and-write round trip is proven** — that proof ran and
   passed on 2026-11-15, so version 1 stands and no new field may be added under it.
 
@@ -360,10 +382,11 @@ empty scopes stayed empty, keeping 45 included, 14 excluded, 8 hand-added proven
 environment profile and its preferences); and a small mixed-spelling list. Every scope value came back and was written
 back verbatim and `schemaVersion` stayed 1; the only differences between the bytes read and the bytes re-written were
 `savedAtUtc` and `writtenBy`, which move on any save, so the evidence is the per-value checks rather than a hash. The
-method is not production code and it is not AM-44.2's gate; any checkpoint that would write a scope
-value re-runs it against whatever commit is then the previous release, and a failed round trip means stop and revisit
-versioning rather than code around it. AM-44.2 (the operator-confirmed association) is next, then AM-44.3 (derivation
-produces qualified scopes, and adding a flow never associates a list). AM-43's multi-environment membership still waits
+method is not production code and it is not AM-44.2's gate; any checkpoint that would let the shipped path write a
+scope value re-runs it against whatever commit is then the previous release, and a failed round trip means stop and
+revisit versioning rather than code around it. AM-44.2 landed on 2026-11-15 with its shipped path writing no qualified
+scope at all - applying an association is deferred - so that harness did not need re-running for it; AM-44.3, which
+does flip derivation, must re-run it before its first write. AM-43's multi-environment membership still waits
 on AM-43.3 — what a Consumption connector really propagates — and AM-43.5, the second-environment proof, which needs
 two environments to measure; AM-44.3 no longer waits on AM-42, whose identity read was recorded on 2026-11-15.
 
@@ -390,11 +413,14 @@ two environments to measure; AM-44.3 no longer waits on AM-42, whose identity re
    AM-43 carries the mandatory multi-environment watchlist capability and AM-44 the verified, never-automatic
    re-identity of legacy unscoped lists.
 5. WF-F: AM-42 is implemented, deployed and **reported by the maintainer** (section 3, item 8) - three identifier
-   sources, shape only. AM-43's **design** half is done and recorded in `docs/provider-capabilities.md`, and AM-44.1
-   (the scope contract, which writes no value) is implemented with its previous-build round-trip proof passed. The
-   order the maintainer approved on 2026-11-15 continues with AM-44.2 (the operator-confirmed association), then
-   AM-44.3 (derivation produces qualified
-   scopes and adding a flow never associates a list), and only then AM-43's build - multi-environment membership and
+   sources, shape only. AM-43's **design** half is done and recorded in `docs/provider-capabilities.md`, AM-44.1
+   (the scope contract, which writes no value) is implemented with its previous-build round-trip proof passed, and
+   AM-44.2 (the verification read, the evidence classes and the operator-confirmed association) is implemented with
+   **applying it deferred** - `ScopeResolutionSupport.Shipped` refuses to re-key a stored list, because this build
+   cannot yet resolve a qualified scope when it loads and matches watchlists. The order the maintainer approved on
+   2026-11-15 therefore continues with AM-44.3, the only checkpoint allowed to lift that deferral: derivation produces
+   qualified scopes, the saved-watchlist path resolves and matches them, a friendly environment label appears as
+   presentation, and adding a flow still never associates a list. Only then AM-43's build - multi-environment membership and
    query fan-out, which needs a second environment to prove - followed by AM-45's independent Azure contexts. The
    single-environment identity work therefore precedes multi-environment connection management: every AM-44
    checkpoint is provable with one environment and AM-43's build is not. Now that the AM-42 identity read is recorded,

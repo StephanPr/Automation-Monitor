@@ -261,7 +261,13 @@ namespace AutomationMonitor.Plugin.Connectivity
             ApplyPaging(query, request, PageReader.DefaultPageSize);
         }
 
-        private static void ApplyPaging(QueryExpression query, PageRequest request, int count)
+        /// <summary>
+        /// The one paging rule for every read this plugin makes. Internal rather than private because
+        /// <see cref="DataverseWorkflowIdentitySource"/> must page exactly the way discovery does - a second
+        /// copy of this logic would let the identity check advance through a window differently from the read
+        /// that filled the watchlist it is checking.
+        /// </summary>
+        internal static void ApplyPaging(QueryExpression query, PageRequest request, int count)
         {
             query.PageInfo = new PagingInfo
             {

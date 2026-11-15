@@ -42,6 +42,12 @@ namespace AutomationMonitor.Plugin
         /// </summary>
         private const string IdentitySource = "Connected environment identity";
 
+        /// <summary>
+        /// Label for the AM-44.2 check. It says what was examined - a saved list, not an environment - because
+        /// its answer is evidence about workflow ids and nothing else.
+        /// </summary>
+        private const string AssociationSource = "Saved list identity";
+
         private readonly DiscoveryView view;
         private readonly IClock clock = new SystemClock();
 
@@ -80,6 +86,7 @@ namespace AutomationMonitor.Plugin
             view.WatchlistButton.Click += (sender, args) => BuildWatchlist();
             view.ProbeButton.Click += (sender, args) => ExecuteMethod(RunFlowRunProbe);
             view.IdentityButton.Click += (sender, args) => ExecuteMethod(RunIdentityProbe);
+            view.AssociateButton.Click += (sender, args) => ExecuteMethod(VerifySavedList);
             view.CancelButton.Click += (sender, args) => CancelRunningWork();
             view.SearchBox.TextChanged += (sender, args) => BindSolutionChoices();
             view.SolutionSelector.SelectedIndexChanged += (sender, args) => OnSolutionChanged();
@@ -444,6 +451,150 @@ namespace AutomationMonitor.Plugin
             return "Connected identity - " + ConnectedIdentityEvaluator.VerdictFor(outcome)
                 + ". The two environment-id sources hold " + IdentityComparison.Describe(outcome.EnvironmentIdMatch)
                 + ". Full result: the identity window that just opened, with a Copy all button.";
+        }
+
+        /// <summary>
+        /// AM-44.2: check one saved list against the organization this connection is authenticated against, and
+        /// show what attaching that identity would do. The action reads and reports; it writes nothing - no
+        /// settings file, no watchlist - and it never applies anything, because this build cannot yet resolve a
+        /// qualified connected scope when it loads and matches saved watchlists. Re-keying a stored list before
+        /// then would leave it naming an identity the monitoring path cannot match, which is a list the operator
+        /// can no longer use; <see cref="ScopeResolutionSupport"/> carries that deferral and names the checkpoint
+        /// that lifts it.
+        /// </summary>
+        private void VerifySavedList()
+        {
+            var connectedService = Service;
+            if (connectedService == null)
+            {
+                view.Say("Connect to a Dataverse environment before verifying a saved list.");
+                return;
+            }
+
+            WatchlistManager? mgr = EnsureManager();
+            if (mgr == null)
+            {
+                ShowStorageUnavailable();
+                return;
+            }
+
+            string? listId = view.SelectedSavedWatchlistId;
+            if (listId == null)
+            {
+                view.Say("Pick a saved watchlist in the Saved box first: this checks a list you have already saved.");
+                return;
+            }
+
+            Watchlist? list = mgr.Catalog.Find(listId);
+            if (list == null)
+            {
+                // Nothing has been read from the file in this session, or the list is gone. Reading the catalogue
+                // is the honest next step; guessing which list the operator meant is not.
+                ReloadSavedWatchlists(listId);
+                view.Say("The saved watchlists were read - pick the list again to verify it.");
+                return;
+            }
+
+            // Membership is read on the UI thread so the worker carries a snapshot of identity keys and never
+            // touches a control or the connection state.
+            List<WorkflowKey> keys = new List<WorkflowKey>();
+            foreach (WatchlistMember member in list.Members)
+            {
+                keys.Add(member.Key);
+            }
+
+            DataverseWorkflowIdentitySource source = new DataverseWorkflowIdentitySource(connectedService);
+            DataverseWorkflowIdentityProbe probe = new DataverseWorkflowIdentityProbe(source, clock);
+            CancellationToken token = BeginWork();
+
+            view.SetBusy(true);
+            view.Say("Verifying the saved list against the connected organization (one identity read plus small bounded queries; nothing is written)...");
+
+            WorkAsync(new WorkAsyncInfo
+            {
+                Message = "Verifying saved list identity...",
+                IsCancelable = true,
+                Work = (worker, args) =>
+                {
+                    DataverseOrganizationIdentity organization = DataverseOrganizationIdentity.Read(connectedService, token);
+                    WorkflowIdentityEvidence evidence = probe.Verify(organization.Scope, keys, token);
+                    args.Result = new SavedListReading(evidence, mgr.PreviewAssociation(listId, evidence));
+                },
+                PostWorkCallBack = args =>
+                {
+                    EndWork();
+                    view.SetBusy(false);
+
+                    Exception? error = args.Error;
+                    if (error != null)
+                    {
+                        ReportFailure(error, AssociationSource);
+                        return;
+                    }
+
+                    SavedListReading? reading = args.Result as SavedListReading;
+                    if (reading == null || reading.Evidence == null || reading.Preview == null)
+                    {
+                        view.Say("The saved-list check returned no result object at all.");
+                        return;
+                    }
+
+                    string report = reading.Evidence.Describe() + Environment.NewLine + reading.Preview.Describe();
+                    LogProbeResult(
+                        reading.Evidence.CanSupportAssociation ? ProbeReportSeverity.Information : ProbeReportSeverity.Warning,
+                        report);
+                    view.Say(AssociationSummary(reading));
+                    view.ShowProbeReport(report, "Saved list identity - verification and preview");
+                }
+            });
+        }
+
+        /// <summary>
+        /// The status line: what the read established and what may be done about it, in one sentence. Both halves
+        /// are Core wording - the verdict and the decision - so this line can never read more confidently than the
+        /// evidence does. The detail lives in the copyable window, because the host's log level drops an info line.
+        /// </summary>
+        private static string AssociationSummary(SavedListReading reading)
+        {
+            WorkflowIdentityEvidence evidence = reading.Evidence!;
+            WatchlistAssociationPreview preview = reading.Preview!;
+
+            string outcome;
+            switch (preview.Decision)
+            {
+                case WatchlistAssociationDecision.ReadyToConfirm:
+                    outcome = "the change is ready and would still need an explicit confirmation";
+                    break;
+                case WatchlistAssociationDecision.NoChange:
+                    outcome = "the list already carries that identity";
+                    break;
+                case WatchlistAssociationDecision.Deferred:
+                    outcome = "applying it is not enabled in this version (" + ScopeResolutionSupport.RequiredCheckpoint + " has to land first)";
+                    break;
+                default:
+                    outcome = "it cannot be applied";
+                    break;
+            }
+
+            return "Saved list check - " + evidence.Verdict + "; " + outcome
+                + ". Nothing was written. Full result: the window that just opened, with a Copy all button.";
+        }
+
+        /// <summary>
+        /// The two Core values one saved-list check produced, carried across the worker boundary as one object so
+        /// the status line and the report can never disagree about which read they describe.
+        /// </summary>
+        private sealed class SavedListReading
+        {
+            public SavedListReading(WorkflowIdentityEvidence evidence, WatchlistAssociationPreview preview)
+            {
+                Evidence = evidence;
+                Preview = preview;
+            }
+
+            public WorkflowIdentityEvidence? Evidence { get; }
+
+            public WatchlistAssociationPreview? Preview { get; }
         }
 
         private void BindSolutionChoices()

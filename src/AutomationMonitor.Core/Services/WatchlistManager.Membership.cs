@@ -119,8 +119,35 @@ namespace AutomationMonitor.Core.Services
                 return WatchlistOperationResult.Refused(WatchlistOperationOutcome.NotFound, _catalog, current, "No solution was given to import from.");
             }
 
+            List<WorkflowReference> incoming = new List<WorkflowReference>();
+            if (flows != null)
+            {
+                foreach (WorkflowReference flow in flows)
+                {
+                    if (flow != null)
+                    {
+                        incoming.Add(flow);
+                    }
+                }
+            }
+
+            // The same rule as adding one flow by hand, counted for the whole batch: a discovery read that now
+            // names a verified organization must not slip that identity into a list whose environment was never
+            // verified. That is the association action, and it belongs to the operator.
+            int scopedCount = CountQualifiedFlows(incoming);
+            if (scopedCount > 0 && !ResourceScope.Read(current.EnvironmentId).IsQualified)
+            {
+                return WatchlistOperationResult.Refused(
+                    WatchlistOperationOutcome.AssociationRequired,
+                    _catalog,
+                    current,
+                    scopedCount.ToString(CultureInfo.InvariantCulture)
+                        + " of the flows being imported carry a verified organization scope and this list has none recorded."
+                        + " Associate this list with that organization first; importing them would give its membership an identity the list does not claim.");
+            }
+
             WatchlistBuilder builder = WatchlistBuilder.From(current);
-            int added = builder.AddSolutionFlows(solution, flows, state, coverageNote, _clock.UtcNow);
+            int added = builder.AddSolutionFlows(solution, incoming, state, coverageNote, _clock.UtcNow);
             if (adoptMode.HasValue)
             {
                 builder.SetMode(adoptMode.Value);
@@ -237,6 +264,12 @@ namespace AutomationMonitor.Core.Services
             if (mismatch != null)
             {
                 return WatchlistOperationResult.Refused(WatchlistOperationOutcome.EnvironmentMismatch, _catalog, current, mismatch);
+            }
+
+            string? associationNeeded = DescribeMissingListScope(current, flow);
+            if (associationNeeded != null)
+            {
+                return WatchlistOperationResult.Refused(WatchlistOperationOutcome.AssociationRequired, _catalog, current, associationNeeded);
             }
 
             WatchlistBuilder builder = WatchlistBuilder.From(current);
@@ -377,13 +410,56 @@ namespace AutomationMonitor.Core.Services
         /// <summary>
         /// Adopt a flow's environment when the list had none recorded. A list built while disconnected
         /// would otherwise stay unscoped forever and start admitting flows from anywhere.
+        ///
+        /// <para>
+        /// A qualified organization scope is never adopted here. Attaching a verified identity to a saved list
+        /// is the association action: it needs a completed verification read, a preview and the operator's
+        /// confirmation. Adopting one from an "add a flow" click would re-point a legacy list's membership at
+        /// an identity the list itself does not claim, which is the silent association this checkpoint exists
+        /// to make impossible.
+        /// </para>
         /// </summary>
         private static void AdoptEnvironment(WatchlistBuilder builder, Watchlist current, WorkflowReference flow)
         {
-            if (current.EnvironmentId.Length == 0 && flow.Key.ScopeId.Length > 0)
+            if (current.EnvironmentId.Length == 0
+                && flow.Key.ScopeId.Length > 0
+                && !flow.Key.Scope.IsQualified)
             {
                 builder.SetEnvironment(flow.Key.ScopeId);
             }
+        }
+
+        /// <summary>
+        /// Why a flow carrying a verified organization scope may not simply join a list whose environment was
+        /// never verified, or null when it may. Adding it would put a verified identity on the list's members
+        /// while the list itself claims none: a half-associated watchlist is worse than an unverified one,
+        /// because it reads as though someone had checked.
+        /// </summary>
+        private static string? DescribeMissingListScope(Watchlist current, WorkflowReference flow)
+        {
+            if (!flow.Key.Scope.IsQualified || ResourceScope.Read(current.EnvironmentId).IsQualified)
+            {
+                return null;
+            }
+
+            return "\"" + flow.Name + "\" carries " + DescribeScope(flow.Key.ScopeId)
+                + ", but this list has no verified environment. Associate the list with that organization first;"
+                + " adding the flow here would attach an identity to your saved list without you confirming it.";
+        }
+
+        /// <summary>How many of these flows carry a scope this build recognizes as a real resource.</summary>
+        private static int CountQualifiedFlows(IEnumerable<WorkflowReference> flows)
+        {
+            int scoped = 0;
+            foreach (WorkflowReference flow in flows)
+            {
+                if (flow.Key.Scope.IsQualified)
+                {
+                    scoped++;
+                }
+            }
+
+            return scoped;
         }
     }
 }

@@ -30,13 +30,14 @@ namespace AutomationMonitor.Core.Services
         private readonly IWatchlistStore _store;
         private readonly IClock _clock;
         private readonly IIdGenerator _ids;
+        private readonly ScopeResolutionSupport _scopeResolution;
 
         private WatchlistCatalog _catalog = WatchlistCatalog.Empty;
         private WatchlistStoreResult? _lastStoreResult;
         private bool _hasUnsavedChanges;
         private bool _blocksSave;
 
-        public WatchlistManager(IWatchlistStore store, IClock clock, IIdGenerator ids)
+        public WatchlistManager(IWatchlistStore store, IClock clock, IIdGenerator ids, ScopeResolutionSupport? scopeResolution = null)
         {
             if (store == null)
             {
@@ -46,6 +47,20 @@ namespace AutomationMonitor.Core.Services
             _store = store;
             _clock = clock ?? new SystemClock();
             _ids = ids ?? new GuidIdGenerator();
+
+            // The shipped default defers re-keying a stored list. A caller passes something else only when this
+            // build really can resolve a qualified connected scope - see ScopeResolutionSupport.
+            _scopeResolution = scopeResolution ?? ScopeResolutionSupport.Shipped;
+        }
+
+        /// <summary>
+        /// Whether this build may reassign a stored scope. The manager asks it before applying an association,
+        /// so the rule that keeps a saved list reachable lives in one place and not in whichever view offers
+        /// the button.
+        /// </summary>
+        public ScopeResolutionSupport ScopeResolution
+        {
+            get { return _scopeResolution; }
         }
 
         /// <summary>The catalog as it now stands, saved or not.</summary>

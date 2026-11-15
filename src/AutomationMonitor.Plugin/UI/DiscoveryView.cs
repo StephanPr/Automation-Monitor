@@ -32,6 +32,10 @@ namespace AutomationMonitor.Plugin.UI
             // wording, so neither reads as a step of the discovery the operator is working through.
             IdentityButton = new Button { Text = "Verify connected identity (diagnostic)", Dock = DockStyle.Left, Width = 226, Height = 26 };
 
+            // AM-44.2: the same measurement applied to one saved list - a bounded read plus the association
+            // preview, shown and never applied by this button. Enabled only when a saved list is picked.
+            AssociateButton = new Button { Text = "Verify saved list (diagnostic)", Dock = DockStyle.Left, Width = 226, Height = 26, Enabled = false };
+
             SolutionSelector = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = nameof(SolutionChoice.Label) };
             SearchBox = new TextBox { Dock = DockStyle.Right, Width = 210 };
             Label searchHint = new Label { Text = "Filter:", Dock = DockStyle.Right, Width = 46, TextAlign = ContentAlignment.MiddleRight };
@@ -78,7 +82,7 @@ namespace AutomationMonitor.Plugin.UI
 
             Label probeHint = new Label
             {
-                Text = "Read-only checks on the connection and the selected flow: shapes and counts only, shown in a copyable window.",
+                Text = "Read-only checks on the connection, the selected flow and a picked saved list: shapes and counts only, shown in a copyable window.",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true
@@ -88,7 +92,9 @@ namespace AutomationMonitor.Plugin.UI
             probeRow.Controls.Add(probeHint);
 
             // Docked controls are laid out back to front, so the identity button is added before the flow probe
-            // to sit to its right, exactly as the toolbar's numbered steps rely on.
+            // to sit to its right, exactly as the toolbar's numbered steps rely on. The saved-list check sits
+            // right of the connection check, since both are diagnostics and neither is a discovery step.
+            probeRow.Controls.Add(AssociateButton);
             probeRow.Controls.Add(IdentityButton);
             probeRow.Controls.Add(ProbeButton);
 
@@ -141,6 +147,13 @@ namespace AutomationMonitor.Plugin.UI
         /// about the connection rather than about a flow - the handler is what refuses when nothing is connected.
         /// </summary>
         public Button IdentityButton { get; }
+
+        /// <summary>
+        /// The AM-44.2 saved-list check: a bounded verification read over the picked saved list plus the
+        /// association preview. Enabled only when a saved list is picked, because it asks about a list rather
+        /// than about the connection or a flow.
+        /// </summary>
+        public Button AssociateButton { get; }
 
         // C6 persistence controls: name and save the built watchlist, or open one already saved for this
         // environment. They hold no logic - the host control drives them and Core supplies the wording.
@@ -258,6 +271,13 @@ namespace AutomationMonitor.Plugin.UI
                 // it knows what is selected, so a busy pass never grants them back on its own.
                 SaveWatchlistButton.Enabled = false;
                 OpenWatchlistButton.Enabled = false;
+                AssociateButton.Enabled = false;
+            }
+            else
+            {
+                // Coming out of a busy pass, the two actions that need a picked saved list are clickable again
+                // if something is still picked - the same rule as before the read started.
+                UpdateOpenEnabled();
             }
 
             UseWaitCursor = isBusy;
@@ -311,6 +331,9 @@ namespace AutomationMonitor.Plugin.UI
         private void UpdateOpenEnabled()
         {
             OpenWatchlistButton.Enabled = !busy && SelectedSavedWatchlistId != null;
+
+            // The same selection rule as opening: a saved-list check with no list picked has nothing to ask.
+            AssociateButton.Enabled = !busy && SelectedSavedWatchlistId != null;
         }
 
         private int IndexOfSavedId(string? id)

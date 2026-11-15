@@ -945,7 +945,10 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
   name of the action the operator has to take instead - and the action never runs by itself on connect, open,
   discovery, refresh or save. AM-44.3a had already given the plugin the ability to resolve a qualified scope when it
   loads, lists and matches saved watchlists, which is what makes the confirmation safe to offer; the checkpoint that
-  has not yet been reported is that resolution being observed running inside XrmToolBox (AC-35).
+  has not yet been reported is that resolution being observed running inside XrmToolBox (AC-35). The action is a
+  **one-time migration of legacy watchlists**, not part of monitoring a workflow: a list keeps refreshing and reporting
+  while its scope is unverified, and a list created against a resolved organization already carries that scope and
+  needs nothing from it (AC-40).
 
 
 ### Packaging
@@ -1082,6 +1085,7 @@ Only after explicit redesign and risk review: enable/disable workflows, cancel r
 - **AC-37:** An unverified stored member is reported as *not matched by this read*, never as absent. A list that is merely unreadable, unauthorized or empty must never be presented as a list whose flows have gone.
 - **AC-38:** Every asynchronous action is bound to the connection and the organization it started against. A result that arrives after the connection changed or closed is discarded and reported as discarded - never applied to the environment that replaced it - and no second source of connected scope exists beside the organization a completed read named.
 - **AC-39:** A watchlist saved while the organization is resolved is created under that scope, and a stored list is matched to an environment by what its scope names rather than by the spelling in the file. A stored scope this build cannot interpret matches only exactly what it says, and a list with no recorded scope stays visible in every environment, including with no connection at all.
+- **AC-40:** The association action is a **one-time migration of legacy watchlists**, not a step of workflow monitoring. It exists for lists saved before the plugin could name an environment - those whose stored scope is empty because no organization had been resolved when they were written - and it is used once per such list. It changes no run, no flow, no monitoring rule and nothing the monitoring pipeline reads; a watchlist keeps working, refreshing and reporting while its scope is still unverified, and the operator is never required to associate a list in order to monitor it. A list created against a resolved organization already carries the qualified scope on the list and on every member, so it needs no action: pressing it there reports no change and writes nothing. The one new-list case that joins the legacy set is a list saved while the identity read named no organization, and it leaves that set the same way - one verification read, one preview, one confirmation.
 
 ---
 

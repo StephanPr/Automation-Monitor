@@ -7,9 +7,10 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-15 - **AM-44.3b is implemented: the association an operator confirms is now reachable, and no
+Last updated: 2026-11-15 - **AM-44.3b is implemented and deployed (`0.1.0+f895528…`): the association an operator confirms is now reachable, and no
 stored identity has moved by itself.** `ScopeResolutionSupport` now ships `Resolvable`, so the confirmed action can
-re-key a saved list from unverified to the connected organization. It remains the only route to a stored qualified
+re-key a saved list from unverified to the connected organization - a **one-time migration of a legacy list**, not a
+monitoring step (AC-40). It remains the only route to a stored qualified
 scope: the action runs AM-44.2's bounded verification read, shows the same preview, asks once, and re-checks before it
 writes that the organization still connected is the one that preview was verified against - so a confirmation given
 after the connection changed or closed is refused and the file stays byte-identical. Adding a flow whose scope is
@@ -301,7 +302,9 @@ Windows session records:
    alongside the two measurements recorded in `docs/provider-capabilities.md` - the shared scope-matching rule and the
    previous-build round trip against a file the association itself wrote. The two deferred points above stay open on
    this build and are folded into item 11.
-11. for AM-44.3b (the association the operator confirms), on the intended connection, **after item 10 has been
+11. for AM-44.3b (the association the operator confirms - a **one-time migration of a legacy watchlist**, not something
+   monitoring a flow requires: a list saved against a resolved organization already carries its scope and needs no
+   action), on the intended connection, **after item 10 has been
    reported** - the re-keying action must not be used against the operator's own saved list before the
    organization-qualified listing, opening and matching it now depends on has been observed: (a) report the
    `ProductVersion` the deployed DLL reports; (b) with a saved list picked, report the label and position of the fourth
@@ -324,6 +327,19 @@ Windows session records:
    list and that the other still lists and opens as before. No agent session connects to an environment or drives the
    plugin's UI to obtain any of this, and no organization value, flow name, identifier or provider message belongs in
    the report.
+   **Deployed for this gate on 2026-11-15 and not yet satisfied.** The absence of the fourth button before this deploy
+   was a version gap, not a layout defect: `Plugins` held `0.1.0+dcdf38a879…` (the AM-44.3a build), which contains no
+   association action at all. `scripts\deploy.ps1` was run with no `XrmToolBox*` process running, staging the Release
+   output rebuilt **after** the commit so the identity names the code: ProductVersion
+   `0.1.0+f89552897893763b2a766f6abe622a6a98a03871`, `AutomationMonitor.Plugin.dll` 82944 B SHA-256 `D4B09E63…` and
+   `AutomationMonitor.Core.dll` 244736 B `7816F403…`, both byte-identical to the build, neither carrying a
+   Zone.Identifier; the replaced `dcdf38a` pair went to `PluginBackups\AutomationMonitor\20261115-220719\`.
+   `Settings\AutomationMonitor\watchlists.json` read `BE735C76…`, 49012 B, mtime 2026-11-15 20:23:28.240 before and
+   after the install: untouched, no identity moved. One layout caveat for step (b): the four buttons in that row are
+   left-docked and sum to about 1004 px plus padding, so at 100 percent the row needs roughly 1020 px of client width,
+   and the rightmost control - this action - is the first to be cut off when the tab is narrower or the scaling higher.
+   If it is missing or its label reads truncated, say so: the remedy is one width property on that button and the row's
+   own wrap, not a redesign, and it will not be guessed at without the observation.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -525,7 +541,9 @@ Five rules come out of AM-41, AM-42 and AM-43 and bind every checkpoint above.
   to an unknown `provider` token, which today is preserved on read and blocks the save instead of vanishing on it.
 - **Association is never automatic.** Adding a flow whose scope is known to a list whose scope is not must not
   re-key the list; same-scope handling stays as it is, and moving from unverified to a named scope happens only
-  through the confirmed action AM-44.2 built and AM-44.3b switched on. AM-44.3a gave the plugin the ability to resolve
+  through the confirmed action AM-44.2 built and AM-44.3b switched on - a **one-time migration of legacy watchlists**,
+  not a monitoring step: an unverified list still monitors fine, and a list saved against a resolved organization already
+  carries the qualified scope and needs nothing from it (specification AC-40). AM-44.3a gave the plugin the ability to resolve
   a qualified scope when it loads, lists and matches saved watchlists, which removed the obstacle that made a re-key
   dangerous rather than merely unconfirmed; AM-44.3b then lifted `ScopeResolutionSupport` deliberately, on the strength
   of the shared `ResourceScope.NamesSameEnvironment` rule used by listing, naming and profile lookup, a re-check that

@@ -562,6 +562,14 @@ that action:
   saved list (diagnostic)* on the discovery toolbar, is enabled by the same selection rule, and is the only reachable
   route to the apply path. A `No` writes nothing; a `Yes` writes once, and the store's own `watchlists.json.bak` stays
   the rollback.
+- **A one-time migration, not a monitoring step.** This action exists for watchlists saved before the plugin could name
+  an environment - lists whose stored scope is empty because no organization had been resolved when they were written -
+  and it is used once per such list. It is not part of watching flows: it changes no run, no flow, no monitoring rule and
+  nothing the monitoring pipeline reads, and an unverified list keeps discovering, refreshing and reporting exactly as it
+  did before. A list saved by AM-44.3a or later already carries `dataverse-organization:<guid>` on the list and on every
+  member, so it needs nothing here and pressing the action on it reports no change and writes no byte. The one way a new
+  list joins the legacy set is being saved *while* the identity read named no organization; it leaves the set the same
+  way - one verification read, one preview, one confirmation. AC-40 in `docs/specification.md` states the rule.
 
 **Not verified by AM-44.3b.** No agent session connected to an environment and none drove the plugin's UI: the button
 has not been seen to load, the preview has not been read on a screen, the refusal wordings have not been observed, and

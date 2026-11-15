@@ -7,7 +7,7 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-15 - **repository presentation and MVP planning pass. The MVP target is 31 December 2026** (section 6.1). No code changed in this pass.
+Last updated: 2026-11-15 - **repository presentation, MVP planning and licensing passes; no code changed in either.** The MVP target is 31 December 2026 (section 6.1). The repository is now licensed under the **Apache License, Version 2.0** with a root `LICENSE`, `NOTICE` and `CONTRIBUTORS.md`; the dependency audit found nothing third-party distributed with the plugin, and how a published release carries the license and notice texts is an open packaging decision owned by `docs/distribution.md`.
 It records the maintainer's live run of the AM-44.3b association on the deployed `f895528` build: every stored workflow identifier in the legacy list
 verified in the connected organization, the preview naming the correct target organization, `No` changing nothing and `Yes` applying the association - the
 first confirmed re-key observed inside XrmToolBox, and the point at which the **environment-identity implementation workstream (AM-41 to AM-44.3b) closes**,
@@ -677,7 +677,7 @@ not promises.
 | 16-22 Nov 2026 | This documentation and metadata pass; the reporting half of M4 and WF-F (the gate items still owed); WF-D.1 and WF-D.2, to get the modern-UI feasibility question under way | published docs agree with the code and with the maintainer's reports; a measured answer on hosting WPF inside XrmToolBox, or the stated WinForms fallback |
 | 23 Nov - 6 Dec 2026 | WF-B: the discovery spike, then browsing flows without a solution and selecting individual flows into a watchlist; the view structure the monitoring screen will live in | flows listed with no solution as the entry point and a watchlist built from a chosen subset, observed on the primary host under the section 3 gate |
 | 7-20 Dec 2026 | The run-history monitoring interface (M5's dashboard): the tested `RunQueryService` behind a grid - status, duration, failure detail - with refresh, cancel and per-source coverage on screen | the Core engine drives a real view, and every coverage state survives from the provider result to the row |
-| 21-31 Dec 2026 | Stabilization: the open gate items, regression fixes, the Windows package and installer run, and the documentation pass that follows | a packaged prerelease candidate whose Windows runtime gate has been run and recorded |
+| 21-31 Dec 2026 | Stabilization: the open gate items, regression fixes, the Windows package and installer run, the decision on how `LICENSE` and `NOTICE` travel with a release (`docs/distribution.md`), and the documentation pass that follows | a packaged prerelease candidate whose Windows runtime gate has been run and recorded, and whose download carries the license and notice texts |
 
 **Outside the MVP, sequenced exactly as before:** AM-43's multi-environment membership and fan-out (it needs a second
 environment to measure), WF-C's Logic Apps discovery and any APIM work (each still spike-first), WF-E's design pass

@@ -1,0 +1,70 @@
+                            NOTICE
+                          Automation Monitor
+
+Copyright 2026 The Automation Monitor authors
+
+Automation Monitor is a read-only XrmToolBox plugin for discovering, organizing and
+monitoring Power Automate flows. The work covered by this notice is the cross-platform
+monitoring core in src/AutomationMonitor.Core, the .NET Framework 4.8 WinForms host in
+src/AutomationMonitor.Plugin, and the documentation, packaging assets and scripts that
+build, test and distribute them.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+except in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the
+License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied. See the License for the specific language governing permissions
+and limitations under the License.
+
+Attribution
+-----------
+This work was written in this repository and carries no attribution from any other project.
+"The Automation Monitor authors" is a collective form: nothing in this repository's records
+names a legal entity as the copyright holder, there is no contributor license agreement, DCO
+or assignment, and no source file carries a per-file copyright header. CONTRIBUTORS.md names
+the commit identities the published history shows and states what they do not settle.
+
+When redistributing this work or a derivative of it, keep this NOTICE file together with the
+LICENSE file, as section 4 of the License requires. Section 6 grants no trademark rights:
+"Automation Monitor", "Power Automate", "Power Platform", "Dataverse", "Logic Apps" and
+"XrmToolBox" appear only to describe what this tool reads and what it runs inside.
+
+Third-party components
+----------------------
+Nothing outside this project is distributed with it, so no third-party notice is required for
+what Automation Monitor ships and none is claimed here. The Windows package is an explicit
+allow-list of the two assemblies this project authors, AutomationMonitor.Plugin.dll and
+AutomationMonitor.Core.dll, plus this project's own installer scripts, end-user guide,
+manifest and checksum file; and AutomationMonitor.Core references no NuGet package at all.
+
+The plugin is compiled against, and at run time binds to, assemblies the XrmToolBox
+installation already supplies. They are recorded here because the rule that keeps them out of
+the package is what makes the paragraph above true:
+
+  XrmToolBox and XrmToolBox.Extensibility (NuGet package XrmToolBoxPackage 1.2025.10.74,
+    authored by MscrmTools): the XrmToolBox repository is licensed under GNU GPL-3.0, and
+    neither its LICENSE.txt nor its README carries a plugin or linking exception; the NuGet
+    package itself declares no license metadata. Supplied by the user's XrmToolBox, and not
+    distributed here - CopyLocalLockFileAssemblies=false keeps it out of the build output.
+
+  MSCrmTools.Xrm.Connection 1.2025.9.64 (MscrmTools): its package metadata declares
+    GNU GPL-3.0 and requireLicenseAcceptance true. Referenced with ExcludeAssets="runtime"
+    for compile-time alignment only, and not distributed here.
+
+  Microsoft.Xrm.Sdk and the rest of the Dataverse SDK closure: host-provided, reached through
+    the two packages above, and not distributed here.
+
+  Microsoft.NETFramework.ReferenceAssemblies.net48 1.0.3 (Microsoft): a build-only targeting
+    pack marked PrivateAssets="all", whose package metadata points at the Microsoft/dotnet
+    repository license. It is never linked at run time and never shipped.
+
+  .NET Framework 4.8, Windows Forms and System.Drawing: provided by Windows.
+
+Whether a plugin that links a GPL-3 host assembly forms a derivative work of that host is a
+legal question this notice does not answer. It is recorded as an open question in
+docs/distribution.md for anyone who redistributes the plugin together with XrmToolBox.
+Re-audit this section whenever a PackageReference is added, the packaging allow-list changes,
+or a third-party assembly starts shipping with the plugin.

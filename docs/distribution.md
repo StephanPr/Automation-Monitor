@@ -127,7 +127,43 @@ dependency and never part of a package.
 Releases are gated behind that job: `publish` has `needs: [prepare, package]`, so a failed
 installer test means no release exists, not a release with a warning.
 
+## License and attribution
+
+`LICENSE` (Apache License, Version 2.0), `NOTICE` and `CONTRIBUTORS.md` sit at the repository root
+and are published with the code. `LICENSE` is the complete text as published by the Apache Software
+Foundation, unmodified: 11358 bytes, LF endings, no BOM, SHA-256
+`CFC7749B96F63BD31C3C42B5C471BF756814053E847C10F3EB003417BC523D30`, compared against
+`https://www.apache.org/licenses/LICENSE-2.0.txt` when the file was added. A different hash means
+somebody edited the license document, which is exactly what a redistributor may not do.
+
+None of the three is a package entry, and the payload contract is unchanged by the license
+decision: the archive still stages `AutomationMonitor.Plugin.dll` plus `AutomationMonitor.Core.dll`
+and this project's own assets, and the installer still writes only manifest-listed assemblies into
+`Plugins`.
+
+**Open decision, recorded and not implemented here.** Section 4 of the license asks a redistributor
+to give the recipient a copy of the license and to keep the notice with the work. A downloaded
+archive would currently carry neither, so the first published release has to settle how they
+travel. Both routes below are correct, and neither is free:
+
+- **Release assets (smaller change).** Attach `LICENSE` and `NOTICE` beside the zip in
+  `.github/workflows/release.yml`. Archive bytes, installer, manifest and validator stay exactly as
+  they are; only the publish step and this document change.
+- **Inside the archive (self-contained download).** Add both files at the zip root. That is a
+  deliberate change to the allow-list contract and must move `scripts/package_windows.py`
+  (`TEXT_ASSETS`), `scripts/validate_windows_package.py` (`REQUIRED_ENTRIES` and the
+  `no-unexpected-entries` set), `EXPECTED_ENTRIES` in `tests/packaging/test_package_windows.py`, the
+  installer suite's expectations, this file and `README.md` **in the same commit**. `SHA256SUMS.txt`
+  covers `plugin/` only, so root-level texts are guarded by the layout assertions rather than by the
+  checksum file.
+
+`packaging/README-WINDOWS.md`, the guide an end user opens first, says nothing about licensing
+today and should point at the license wherever it lands. What must not happen is a copy of
+`LICENSE` under `plugin/` or into the installed `Plugins` directory: the host scans that folder for
+assemblies, and the manifest's `files` list is the set the installer copies.
+
 ## What is verified, and where
+
 
 | Layer | Evidence | Where |
 |---|---|---|
@@ -140,6 +176,9 @@ installer test means no release exists, not a release with a warning.
 | Assembly name/version identity | `[AssemblyName]::GetAssemblyName` assertions | Windows CI only |
 | Installer behaviour | 36 Pester tests: fresh, upgrade, repeat, spaces+parens, custom and default storage, blocked file, missing/damaged/foreign package, rollback, uninstall, unattended `Install.cmd`, plus a batch-harness self-check that proves the `cmd /s` invocation, both stream captures and the child's exit code independently of the installer | **Windows CI only - not yet executed** |
 | Plugin loads in XrmToolBox; grid renders; live Dataverse reads; portal deep links | none | **no environment available** |
+| License text integrity | `LICENSE` is byte-identical to the Apache Software Foundation's published `LICENSE-2.0.txt` (SHA-256 above, 11358 bytes, LF, no BOM) | Windows workstation, when the file was added |
+| GitHub reports the license on the repository page | `LICENSE` sits at the root with the canonical Apache-2.0 text, which is what GitHub's detector matches; **not yet observed**, because detection reads the default branch and `main` does not carry these files yet | GitHub repository "About" box, after this lands on the default branch |
+
 
 ## Runtime sign-off checklist (still to be done by a person, on Windows)
 
@@ -172,4 +211,7 @@ Until these are ticked, every release stays a prerelease:
 - The Pester suite has **never run**: no PowerShell on this workstation and the CI run has to
   happen on GitHub. Expect the first execution to surface fixes.
 - The package is unsigned and no code-signing is planned without an explicit decision.
+- A published release must carry `LICENSE` and `NOTICE` somewhere the recipient receives them.
+  Neither travels with the archive today; see *License and attribution* for the two ways to close
+  it and the files each one has to change. Decide this before the first release, not after it.
 - Nothing publishes to the XrmToolBox Tool Library or NuGet, by design.

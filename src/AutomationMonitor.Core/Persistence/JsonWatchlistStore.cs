@@ -63,7 +63,8 @@ namespace AutomationMonitor.Core.Persistence
             WatchlistCatalog catalog;
             string? problem;
             System.Collections.Generic.IReadOnlyList<string> notes;
-            if (!SettingsMap.TryToCatalog(loaded.Document, out catalog, out problem, out notes))
+            System.Collections.Generic.IReadOnlyList<string> unrepresented;
+            if (!SettingsMap.TryToCatalog(loaded.Document, out catalog, out problem, out notes, out unrepresented))
             {
                 // Valid JSON whose content this build cannot honour is still a refusal: writing back
                 // what was understood would silently delete what was not.
@@ -71,18 +72,39 @@ namespace AutomationMonitor.Core.Persistence
                 return WatchlistStoreResult.Refused(SettingsOutcome.RejectedCorrupt, problem, loaded.Notes, notes);
             }
 
+            // A read that had to leave a member out is neither a refusal nor a clean read. The lists are shown,
+            // and the mark carried on the catalog (not on this field) is what blocks the next save: one file
+            // holds every list, so writing any of them back would delete what this build could not represent.
+            // Saying so here, in the notes a view already renders, is what stops the operator meeting the
+            // block for the first time when a save fails.
             _refuseOverwrite = false;
-            return WatchlistStoreResult.From(loaded, catalog, loaded.Notes, notes);
+            System.Collections.Generic.List<string> readNotes = new System.Collections.Generic.List<string>(notes);
+            foreach (string blocked in unrepresented)
+            {
+                readNotes.Add("saving is blocked until this is readable again: " + blocked);
+            }
+
+            return WatchlistStoreResult.From(loaded, catalog, loaded.Notes, readNotes);
         }
 
         public WatchlistStoreResult Write(WatchlistCatalog catalog)
         {
+            if (catalog == null)
+            {
+                throw new ArgumentNullException(nameof(catalog));
+            }
+
             if (_refuseOverwrite)
             {
                 return WatchlistStoreResult.Refused(
                     SettingsOutcome.Failed,
                     "The saved file is not something this version can read, so nothing was written over it. "
                         + "Reload to try again, or reset the saved watchlists if you mean to replace them.");
+            }
+
+            if (catalog.HasUnrepresentedMembers)
+            {
+                return WatchlistStoreResult.Refused(SettingsOutcome.Failed, catalog.DescribeUnrepresentedMembers());
             }
 
             return Save(catalog);

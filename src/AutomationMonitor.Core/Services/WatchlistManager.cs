@@ -67,8 +67,9 @@ namespace AutomationMonitor.Core.Services
         }
 
         /// <summary>
-        /// True while the file on disk is something this build could not read. Saving stays blocked so
-        /// the only way forward is a reload or an explicit reset, both of which the operator chose.
+        /// True while the saved file is not fully understood by this build: it could not be read at all, or it
+        /// was read with members left out because their content has no meaning here. Saving stays blocked so the
+        /// only ways forward are a reload or an explicit replace, both of which the operator chose.
         /// </summary>
         public bool BlocksSave
         {
@@ -92,7 +93,10 @@ namespace AutomationMonitor.Core.Services
             WatchlistStoreResult read = _store.Read();
             _lastStoreResult = read;
             _catalog = read.Catalog;
-            _blocksSave = read.IsPreservedRefusal;
+
+            // A file this build could not read at all, or could read only in part, blocks saving for the same
+            // reason: writing from memory would replace content that memory does not hold.
+            _blocksSave = read.IsPreservedRefusal || _catalog.HasUnrepresentedMembers;
             _hasUnsavedChanges = false;
             return read;
         }

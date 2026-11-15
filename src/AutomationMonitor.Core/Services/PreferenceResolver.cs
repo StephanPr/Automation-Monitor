@@ -118,12 +118,17 @@ namespace AutomationMonitor.Core.Services
     /// <summary>Resolves the settings inheritance chain for one environment and watchlist.</summary>
     public static class PreferenceResolver
     {
-        /// <summary>How the environment level is named in a message, using its id when one is known.</summary>
+        /// <summary>
+        /// How the environment level is named in a message. The scope's own label is used rather than the
+        /// stored value: the organization identifier is identity, not something an operator reads, and the
+        /// fingerprint alone is enough to see which level a preference came from.
+        /// </summary>
         public static string EnvironmentSource(string? environmentId)
         {
-            return string.IsNullOrWhiteSpace(environmentId)
+            ResourceScope scope = ResourceScope.Read(environmentId);
+            return scope.IsUnverified
                 ? EffectivePreferences.NoEnvironmentSource
-                : "environment " + environmentId!.Trim() + " default";
+                : ResourceScopeLabel.Describe(scope) + " default";
         }
 
         /// <summary>

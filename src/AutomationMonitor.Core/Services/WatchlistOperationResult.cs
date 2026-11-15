@@ -41,7 +41,13 @@ namespace AutomationMonitor.Core.Services
         StorageRefused = 8,
 
         /// <summary>The store failed for another reason (permissions, read-only, disk).</summary>
-        StorageFailed = 9
+        StorageFailed = 9,
+
+        /// <summary>
+        /// The loaded file holds content this build cannot represent, so no list may be changed from it: an
+        /// edit could only be saved by rewriting the file without the content the read left out.
+        /// </summary>
+        UnreadableContent = 10
     }
 
     /// <summary>The result of one watchlist mutation, with the catalog as it now stands.</summary>
@@ -135,6 +141,9 @@ namespace AutomationMonitor.Core.Services
                     break;
                 case WatchlistOperationOutcome.NotAllowedInMode:
                     text.Append("This watchlist's membership mode does not allow that");
+                    break;
+                case WatchlistOperationOutcome.UnreadableContent:
+                    text.Append("NOTHING WAS CHANGED - the saved file holds content this version cannot read");
                     break;
                 case WatchlistOperationOutcome.StorageRefused:
                     text.Append("NOTHING WAS SAVED - the settings file could not be read");

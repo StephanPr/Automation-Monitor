@@ -90,12 +90,14 @@ namespace AutomationMonitor.Plugin.UI
                 throw new ArgumentNullException(nameof(flow));
             }
 
-            // WorkflowKey normalises the id, so this is the provider id kept for deep links.
+            // WorkflowKey normalises the id, so this is the provider id kept for deep links. The environment
+            // column is the shared scope label: it says what kind of scope the row carries and never prints a
+            // whole identifier, which is how an organization id stays out of an on-screen status line.
             return new FlowRow(
                 flow.Name,
                 flow.StateLabel,
                 flow.WorkflowId,
-                string.IsNullOrEmpty(flow.EnvironmentId) ? "unknown environment" : flow.EnvironmentId,
+                ResourceScopeLabel.DescribeStored(flow.EnvironmentId),
                 flow.ModifiedOnUtc.HasValue
                     ? flow.ModifiedOnUtc.Value.ToUniversalTime().ToString("u", CultureInfo.InvariantCulture)
                     : "not reported");

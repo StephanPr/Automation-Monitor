@@ -31,6 +31,12 @@ namespace AutomationMonitor.Core.Models
 
         public string EnvironmentId { get { return Workflow.ScopeId; } }
 
+        /// <summary>
+        /// The workflow key's resource scope, offered here so a run reader never has to re-parse the stored
+        /// text and cannot invent a second rule for what an empty or unknown scope means.
+        /// </summary>
+        public ResourceScope Scope { get { return Workflow.Scope; } }
+
         public string WorkflowId { get { return Workflow.WorkflowId; } }
 
         /// <summary>Text form used for de-duplication and cache keys, e.g. <c>powerautomate:env:wf:run</c>.</summary>

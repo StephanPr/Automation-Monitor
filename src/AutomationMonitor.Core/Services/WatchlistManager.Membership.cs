@@ -141,6 +141,19 @@ namespace AutomationMonitor.Core.Services
 
         private WatchlistOperationResult Commit(WatchlistCatalog next, Watchlist? watchlist, string reason, IEnumerable<string>? notes = null)
         {
+            // Every mutation runs through here, so one guard covers them all. A catalog that was read with
+            // content left out is never edited: the only way to persist an edit would be to rewrite the file
+            // without the members this build could not represent. The store refuses such a save too; refusing
+            // here stops the operator being offered an edit that cannot land.
+            if (next.HasUnrepresentedMembers || _catalog.HasUnrepresentedMembers)
+            {
+                return WatchlistOperationResult.Refused(
+                    WatchlistOperationOutcome.UnreadableContent,
+                    _catalog,
+                    watchlist,
+                    next.DescribeUnrepresentedMembers());
+            }
+
             // A caller that hands over a changed list gets it replaced by id: keeping the replace here
             // means no mutation can report "applied" while the catalog still holds the old instance.
             if (watchlist != null)
@@ -203,7 +216,7 @@ namespace AutomationMonitor.Core.Services
             return Commit(
                 _catalog.WithSettings(_catalog.Settings.WithActiveEnvironment(scope, _clock.UtcNow)),
                 null,
-                scope.Length == 0 ? "no environment recorded" : "active environment is " + scope);
+                scope.Length == 0 ? "no environment recorded" : "active environment is " + ResourceScopeLabel.DescribeStored(scope));
         }
 
         /// <summary>Add one flow by hand. It survives every later dynamic refresh.</summary>
@@ -323,9 +336,11 @@ namespace AutomationMonitor.Core.Services
 
         private static string DescribeScope(string? environmentId)
         {
-            return string.IsNullOrWhiteSpace(environmentId)
+            // The shared scope wording, so a refusal names what kind of scope it is without ever printing a
+            // whole identifier - and never a display name, which is not an identity.
+            return ResourceScope.Read(environmentId).IsUnverified
                 ? "an environment that was not recorded"
-                : "environment " + environmentId!.Trim();
+                : ResourceScopeLabel.DescribeStored(environmentId);
         }
 
         private static bool Contains(IReadOnlyList<Watchlist> watchlists, Watchlist candidate)

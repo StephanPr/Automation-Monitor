@@ -733,6 +733,13 @@ The **canonical workflow key** includes its provider and scope, not just its nam
 may contain a colon, and the implemented file stores provider, scope and workflow id as three separate fields for
 exactly that reason. See `docs/provider-capabilities.md` for the scope token and what each of its states licenses.
 
+The scope is implemented as `ResourceScope`. The only kind this build can author is `dataverse-organization`, its
+identifier is canonicalised so the braced, undashed and upper-case spellings of one organization are one key, and a
+value it cannot interpret is kept whole and shown as unreadable rather than as an absent environment. Nothing licenses
+a connection from a stored token: recognized, connected and associated stay separate, and only a completed
+verification read plus an explicit operator confirmation may move one to the next. What an operator sees is rendered
+by `ResourceScopeLabel`, never from the stored text, so no status line, log line or export carries a whole identifier.
+
 ### 14.2 Run record
 
 | Field | Meaning |

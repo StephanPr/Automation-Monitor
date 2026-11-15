@@ -284,6 +284,16 @@ internal sealed class FakeSettingsFiles : ISettingsFileAccess
         _files[SettingsLayout.PendingOf(fileName)] = pendingContent;
     }
 
+    /// <summary>
+    /// Plant the raw text of a stored file, so a test can assert on bytes this build never wrote -
+    /// a scope in another spelling, a provider token it does not know, a file from an older release.
+    /// </summary>
+    public void PlantFile(string fileName, string content)
+    {
+        HasDirectory = true;
+        _files[fileName] = content;
+    }
+
     public bool DirectoryExists()
     {
         return HasDirectory;

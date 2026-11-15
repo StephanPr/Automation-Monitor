@@ -9,21 +9,34 @@ namespace AutomationMonitor.Core.Models
     /// </summary>
     public sealed class WorkflowKey : IEquatable<WorkflowKey?>
     {
+        private readonly ResourceScope _scope;
+
         private WorkflowKey(ProviderKind provider, string? scopeId, string workflowId)
         {
             Provider = provider;
-            ScopeId = CanonicalId.Text(scopeId);
+            ScopeId = ResourceScope.NormalizeStored(scopeId);
+            _scope = ResourceScope.Read(ScopeId);
             WorkflowId = CanonicalId.Identifier(workflowId);
         }
 
         public ProviderKind Provider { get; }
 
         /// <summary>
-        /// Environment identifier for Power Automate, empty when the source cannot report one.
-        /// An empty scope is deliberately a different key from a known scope: results read from an
-        /// unidentified environment must never merge with identified ones.
+        /// Resource scope for Power Automate - a Dataverse organization once the scope contract is in use,
+        /// and empty while the identity has not been verified. An empty scope is deliberately a different key
+        /// from a known scope: results read from an unidentified environment must never merge with
+        /// identified ones. Equality stays on this text; <see cref="Scope"/> is what it means.
         /// </summary>
         public string ScopeId { get; }
+
+        /// <summary>
+        /// What <see cref="ScopeId"/> is: unverified, a recognized organization scope, or text this build
+        /// preserves but cannot interpret. Reading it says nothing about the current connection.
+        /// </summary>
+        public ResourceScope Scope
+        {
+            get { return _scope; }
+        }
 
         /// <summary>The provider's own stable workflow id, in canonical lower-case form.</summary>
         public string WorkflowId { get; }

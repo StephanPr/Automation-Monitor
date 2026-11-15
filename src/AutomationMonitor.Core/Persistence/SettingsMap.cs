@@ -17,9 +17,13 @@ namespace AutomationMonitor.Core.Persistence
     /// may delete membership, so guessing one is how a watchlist gets quietly rewritten.
     /// </description></item>
     /// <item><description>
-    /// A <em>field-level</em> oddity - one member whose provider this build does not know, one
-    /// unreadable origin token, one out-of-range threshold - is dropped with a note. The operator keeps
-    /// the rest of the file and is told exactly what was not understood.
+    /// A <em>field-level</em> oddity - one unreadable origin token, one out-of-range threshold - is dropped
+    /// with a note. The operator keeps the rest of the file and is told exactly what was not understood. An
+    /// oddity that removes a <em>member</em> - a provider this build does not know, a stored id that is
+    /// missing - is reported as unrepresented content on top of the note: the catalog stays usable, but the
+    /// store refuses to write it back, because saving would delete from the file what the read could not
+    /// understand. Scope text is never dropped at all; a value this build cannot interpret goes back out
+    /// exactly as it came in.
     /// </description></item>
     /// </list>
     /// </summary>
@@ -155,8 +159,31 @@ namespace AutomationMonitor.Core.Persistence
         /// </summary>
         public static bool TryToCatalog(SettingsDocument? document, out WatchlistCatalog catalog, out string? problem, out IReadOnlyList<string> notes)
         {
+            return TryToCatalog(document, out catalog, out problem, out notes, out _);
+        }
+
+        /// <summary>
+        /// The same read, additionally reporting what it had to leave out.
+        ///
+        /// <para>
+        /// <paramref name="unrepresentedMembers"/> is not a warning to be shown and forgotten: a catalog
+        /// carrying it is a partial view of the file, and a save from that catalog would rewrite the file
+        /// without those members. Dropping a provider this build does not know and then writing the file back
+        /// is the data loss AC-29 exists to prevent, so the store refuses the save and the caller shows these
+        /// lines to explain what is blocked and why.
+        /// </para>
+        /// </summary>
+        public static bool TryToCatalog(
+            SettingsDocument? document,
+            out WatchlistCatalog catalog,
+            out string? problem,
+            out IReadOnlyList<string> notes,
+            out IReadOnlyList<string> unrepresentedMembers)
+        {
             List<string> messages = new List<string>();
             notes = messages;
+            List<string> unrepresented = new List<string>();
+            unrepresentedMembers = unrepresented;
             problem = null;
             catalog = WatchlistCatalog.Empty;
 
@@ -209,7 +236,7 @@ namespace AutomationMonitor.Core.Persistence
                     foreach (WatchlistDocument stored in document.Watchlists.Items)
                     {
                         Watchlist? watchlist;
-                        if (!TryRead(stored, out watchlist, out problem, messages))
+                        if (!TryRead(stored, out watchlist, out problem, messages, unrepresented))
                         {
                             return false;
                         }
@@ -231,11 +258,16 @@ namespace AutomationMonitor.Core.Persistence
                 }
             }
 
-            catalog = new WatchlistCatalog(watchlists, activeWatchlistId, settings);
+            catalog = new WatchlistCatalog(watchlists, activeWatchlistId, settings, unrepresented);
             return true;
         }
 
-        private static bool TryRead(WatchlistDocument? stored, out Watchlist? watchlist, out string? problem, List<string> notes)
+        private static bool TryRead(
+            WatchlistDocument? stored,
+            out Watchlist? watchlist,
+            out string? problem,
+            List<string> notes,
+            List<string> unrepresented)
         {
             watchlist = null;
             problem = null;
@@ -294,13 +326,14 @@ namespace AutomationMonitor.Core.Persistence
 
             WatchlistBuilder builder = new WatchlistBuilder(id, name, mode, stored.Description, stored.EnvironmentId);
             builder.SetPreferences(ReadPreferences(stored.Preferences, name, notes));
+            NoteUninterpretableScope(stored.EnvironmentId, "watchlist \"" + name + "\"", notes);
 
             if (stored.Members != null)
             {
                 foreach (WatchlistMemberDocument member in stored.Members)
                 {
                     WatchlistMember? read;
-                    if (!TryRead(member, name, out read, out problem, notes))
+                    if (!TryRead(member, name, out read, out problem, notes, unrepresented))
                     {
                         return false;
                     }
@@ -336,13 +369,20 @@ namespace AutomationMonitor.Core.Persistence
         /// Read one stored member. A member whose identity cannot be reconstructed is dropped with a
         /// note rather than loaded with a guessed key: a wrong identity merges two flows together, which
         /// is worse than a watchlist that says one flow is missing.
+        ///
+        /// <para>
+        /// Dropping is not harmless. The file on disk still holds that member, so every drop is reported again
+        /// in <paramref name="unrepresented"/>, and that report is what stops the catalog being written back
+        /// over a file this build only half read.
+        /// </para>
         /// </summary>
         private static bool TryRead(
             WatchlistMemberDocument? stored,
             string watchlistName,
             out WatchlistMember? member,
             out string? problem,
-            List<string> notes)
+            List<string> notes,
+            List<string> unrepresented)
         {
             member = null;
             problem = null;
@@ -356,6 +396,8 @@ namespace AutomationMonitor.Core.Persistence
             {
                 notes.Add("a member of \"" + watchlistName + "\" names the provider \""
                     + SettingsFormat.Text(stored.Provider, 60) + "\", which this version cannot read, so it was skipped");
+                unrepresented.Add("a member of \"" + watchlistName + "\" belongs to the provider \""
+                    + SettingsFormat.Text(stored.Provider, 60) + "\"");
                 return true;
             }
 
@@ -363,6 +405,7 @@ namespace AutomationMonitor.Core.Persistence
             if (workflowId.Length == 0)
             {
                 notes.Add("a member of \"" + watchlistName + "\" has no workflow id, so it was skipped");
+                unrepresented.Add("a member of \"" + watchlistName + "\" carries no workflow id");
                 return true;
             }
 
@@ -393,6 +436,7 @@ namespace AutomationMonitor.Core.Persistence
                 notes.Add("a member of \"" + watchlistName + "\" did not say whether it is included, so it is monitored");
             }
 
+            NoteUninterpretableScope(stored.ScopeId, "a member of \"" + watchlistName + "\"", notes);
             WorkflowKey key = WorkflowKey.Create(provider, stored.ScopeId, workflowId);
             WorkflowReference workflow = new WorkflowReference(
                 key,
@@ -520,6 +564,10 @@ namespace AutomationMonitor.Core.Persistence
                     return false;
                 }
 
+                // A scope this build cannot interpret stays exactly as stored here too: the profile is the
+                // environment's own record, and guessing at it would be worse than leaving it unread.
+                NoteUninterpretableScope(profile.EnvironmentId, "an environment profile", notes);
+
                 RefreshInterval? autoRefresh = null;
                 if (!string.IsNullOrWhiteSpace(profile.AutoRefresh))
                 {
@@ -530,8 +578,8 @@ namespace AutomationMonitor.Core.Persistence
                     }
                     else
                     {
-                        notes.Add("the environment profile \"" + SettingsFormat.Text(profile.EnvironmentId, 60)
-                            + "\" stored an unusable refresh interval, so it inherits the default");
+                        notes.Add("the environment profile " + ResourceScopeLabel.DescribeStored(profile.EnvironmentId)
+                            + " stored an unusable refresh interval, so it inherits the default");
                     }
                 }
 
@@ -545,8 +593,8 @@ namespace AutomationMonitor.Core.Persistence
                     }
                     else
                     {
-                        notes.Add("the environment profile \"" + SettingsFormat.Text(profile.EnvironmentId, 60)
-                            + "\" stored an unusable date range, so it inherits the default");
+                        notes.Add("the environment profile " + ResourceScopeLabel.DescribeStored(profile.EnvironmentId)
+                            + " stored an unusable date range, so it inherits the default");
                     }
                 }
 
@@ -559,6 +607,25 @@ namespace AutomationMonitor.Core.Persistence
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Note a stored scope this build cannot interpret, without touching it. A scope is identity the
+        /// operator's file holds and a later build may understand, so it is written back exactly as it came in
+        /// and never converted to an empty scope. An unqualified value (no kind token) is the ordinary shape a
+        /// file had before kinds were recorded, so it stays quiet; only an unknown kind or a damaged
+        /// identifier is worth the operator's attention.
+        /// </summary>
+        private static void NoteUninterpretableScope(string? storedScope, string owner, List<string> notes)
+        {
+            ResourceScope scope = ResourceScope.Read(storedScope);
+            if (scope.State != ResourceScopeState.UnrecognizedKind && scope.State != ResourceScopeState.Invalid)
+            {
+                return;
+            }
+
+            notes.Add(owner + " recorded an environment scope this version cannot interpret ("
+                + scope.State + "), so it is kept exactly as stored and shown as unreadable");
         }
     }
 }

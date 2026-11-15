@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 
 namespace AutomationMonitor.Core.Models
 {
@@ -10,7 +12,13 @@ namespace AutomationMonitor.Core.Models
     /// </summary>
     public sealed class WatchlistCatalog
     {
-        public WatchlistCatalog(IEnumerable<Watchlist>? watchlists, string? activeWatchlistId, ApplicationSettings? settings)
+        private readonly IReadOnlyList<string> _unrepresentedMembers;
+
+        public WatchlistCatalog(
+            IEnumerable<Watchlist>? watchlists,
+            string? activeWatchlistId,
+            ApplicationSettings? settings,
+            IEnumerable<string>? unrepresentedMembers = null)
         {
             List<Watchlist> lists = new List<Watchlist>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -32,6 +40,20 @@ namespace AutomationMonitor.Core.Models
             Watchlists = lists;
             ActiveWatchlistId = string.IsNullOrWhiteSpace(activeWatchlistId) ? null : activeWatchlistId!.Trim();
             Settings = settings ?? ApplicationSettings.Defaults;
+
+            List<string> unreadable = new List<string>();
+            if (unrepresentedMembers != null)
+            {
+                foreach (string note in unrepresentedMembers)
+                {
+                    if (!string.IsNullOrWhiteSpace(note) && !unreadable.Contains(note))
+                    {
+                        unreadable.Add(note!.Trim());
+                    }
+                }
+            }
+
+            _unrepresentedMembers = unreadable;
         }
 
         /// <summary>No watchlists and first-run settings.</summary>
@@ -41,6 +63,50 @@ namespace AutomationMonitor.Core.Models
         }
 
         public IReadOnlyList<Watchlist> Watchlists { get; }
+
+        /// <summary>
+        /// What the read had to leave out: one entry per stored member this build cannot represent, naming the
+        /// list it belongs to and the value it could not interpret. Empty for anything built in memory.
+        ///
+        /// <para>
+        /// This is the mark that blocks a save. One file holds every list, so writing any of them rewrites the
+        /// lists that lost members and would delete what the read could not understand - the same data loss the
+        /// unreadable-file refusal exists to prevent, arriving by a quieter route. The mark is therefore sticky
+        /// through every mutation, including the removal of the affected list: deleting it from memory is not
+        /// evidence that the file's copy may be discarded.
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<string> UnrepresentedMembers
+        {
+            get { return _unrepresentedMembers; }
+        }
+
+        public bool HasUnrepresentedMembers
+        {
+            get { return _unrepresentedMembers.Count > 0; }
+        }
+
+        /// <summary>The operator-facing account of the mark: what is missing, and the two ways out.</summary>
+        public string DescribeUnrepresentedMembers()
+        {
+            if (!HasUnrepresentedMembers)
+            {
+                return "nothing is unreadable in the loaded watchlists";
+            }
+
+            StringBuilder text = new StringBuilder();
+            text.Append(_unrepresentedMembers.Count.ToString(CultureInfo.InvariantCulture))
+                .Append(" saved member(s) are written in a form this version cannot read, so the saved file is not")
+                .Append(" rewritten from what is in memory. Nothing has been lost: the file still holds them.");
+            foreach (string note in _unrepresentedMembers)
+            {
+                text.Append(" - ").Append(note);
+            }
+
+            text.Append(" Open the file with a version that understands those values, or replace the saved")
+                .Append(" watchlists deliberately if you mean to discard them.");
+            return text.ToString();
+        }
 
         /// <summary>
         /// Selection that is not tied to one environment. The per-environment selection in
@@ -167,7 +233,7 @@ namespace AutomationMonitor.Core.Models
 
         public WatchlistCatalog WithWatchlists(IEnumerable<Watchlist> watchlists, string? activeWatchlistId = null)
         {
-            return new WatchlistCatalog(watchlists, activeWatchlistId ?? ActiveWatchlistId, Settings);
+            return Rebuild(watchlists, activeWatchlistId ?? ActiveWatchlistId, Settings);
         }
 
         /// <summary>Inserts or replaces one watchlist by id, keeping the stored order otherwise.</summary>
@@ -184,12 +250,12 @@ namespace AutomationMonitor.Core.Models
                 if (string.Equals(lists[i].Id, watchlist.Id, StringComparison.OrdinalIgnoreCase))
                 {
                     lists[i] = watchlist;
-                    return new WatchlistCatalog(lists, ActiveWatchlistId, Settings);
+                    return Rebuild(lists, ActiveWatchlistId, Settings);
                 }
             }
 
             lists.Add(watchlist);
-            return new WatchlistCatalog(lists, ActiveWatchlistId, Settings);
+            return Rebuild(lists, ActiveWatchlistId, Settings);
         }
 
         /// <summary>
@@ -222,8 +288,10 @@ namespace AutomationMonitor.Core.Models
                 return this;
             }
 
+            // The unreadable mark survives: dropping the list that carries it from memory does not make the
+            // file's copy of those members safe to overwrite.
             string? active = string.Equals(ActiveWatchlistId, id, StringComparison.OrdinalIgnoreCase) ? null : ActiveWatchlistId;
-            return new WatchlistCatalog(lists, active, Settings.WithoutActiveWatchlist(id));
+            return Rebuild(lists, active, Settings.WithoutActiveWatchlist(id));
         }
 
         /// <summary>
@@ -239,12 +307,21 @@ namespace AutomationMonitor.Core.Models
                 settings = settings.WithActiveWatchlist(environmentId, id, usedAtUtc.Value);
             }
 
-            return new WatchlistCatalog(Watchlists, id, settings);
+            return Rebuild(Watchlists, id, settings);
         }
 
         public WatchlistCatalog WithSettings(ApplicationSettings settings)
         {
-            return new WatchlistCatalog(Watchlists, ActiveWatchlistId, settings);
+            return Rebuild(Watchlists, ActiveWatchlistId, settings);
+        }
+
+        /// <summary>
+        /// Every derived catalog is built here, so the unreadable mark cannot be dropped by a mutation that
+        /// forgot to carry it. A copy that lost the mark would let a save rewrite a file it only half read.
+        /// </summary>
+        private WatchlistCatalog Rebuild(IEnumerable<Watchlist> watchlists, string? activeWatchlistId, ApplicationSettings settings)
+        {
+            return new WatchlistCatalog(watchlists, activeWatchlistId, settings, _unrepresentedMembers);
         }
     }
 }

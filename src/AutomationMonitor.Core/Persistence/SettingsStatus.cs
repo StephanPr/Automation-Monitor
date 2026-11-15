@@ -98,5 +98,46 @@ namespace AutomationMonitor.Core.Persistence
 
             return text.ToString();
         }
+
+        /// <summary>
+        /// The store's own line for a read, plus the one thing a per-environment view must add: how many of
+        /// the stored lists this environment actually gets to see. An empty drop-down has to read as "0 of
+        /// the 3 saved lists are for this environment" rather than as "you have nothing saved", and a
+        /// connection that reported no environment id has to say so out loud, because per-environment
+        /// isolation is not in force for it. This is the only place that wording exists, so no view can
+        /// present a scoped or unscoped read as a different one.
+        /// </summary>
+        public static string DescribeForEnvironment(WatchlistStoreResult result, string? environmentId)
+        {
+            if (result == null)
+            {
+                throw new ArgumentNullException(nameof(result));
+            }
+
+            string scope = WatchlistScope.Normalize(environmentId);
+            int visible = result.Catalog.ForEnvironment(scope).Count;
+            StringBuilder text = new StringBuilder(result.Describe());
+
+            if (result.IsUsable)
+            {
+                text.Append(" - ")
+                    .Append(visible.ToString(CultureInfo.InvariantCulture))
+                    .Append(" of ")
+                    .Append(result.Catalog.Count.ToString(CultureInfo.InvariantCulture))
+                    .Append(" saved list(s) shown here");
+
+                if (visible == 0 && result.Catalog.Count > 0)
+                {
+                    text.Append(" - they were saved for other environments");
+                }
+            }
+
+            if (scope.Length == 0)
+            {
+                text.Append(" - the connection reported no environment id, so these saved lists are not environment-scoped");
+            }
+
+            return text.ToString();
+        }
     }
 }

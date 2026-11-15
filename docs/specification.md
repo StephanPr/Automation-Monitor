@@ -866,6 +866,14 @@ monitor; the fuller Watchlists view (reconciliation preview, management) is stil
   recovery copies from the recovery path, so a reset stays a reset without shredding data.
 - Control characters in provider-supplied names are stored as single spaces; everything else about a name
   survives the file byte for byte.
+- The Saved list is read from disk when the drop-down is opened, at most once per environment per session.
+  The read state and the environment scope are different facts: a connection that reports no environment id
+  uses the empty scope, so it must never be mistaken for a catalogue that has already been read, and a
+  refused read is tried again at the next opening rather than remembered - repairing the file by hand is
+  enough to get the lists back.
+- A watchlist stored with no environment recorded is listed for every connection and the status line says it
+  is not environment-scoped; a watchlist stored for one named environment is never listed in, or selectable
+  for, another.
 
 ### Packaging
 

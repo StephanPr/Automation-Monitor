@@ -7,7 +7,18 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-14 - M4 C6 done on top of C5. C5 gave the plugin the storage root
+Last updated: 2026-11-15 - AM-40, the defect the first live save-and-reopen exposed: a persisted watchlist
+was on disk and valid but missing from the Saved drop-down. `AutomationMonitorControl` had been answering
+"have I read this environment's lists already?" from a string initialised to the empty value, and a connection
+that reports no environment id (now measured, see `docs/provider-capabilities.md`) uses exactly that value - so
+the read that fills the drop-down never ran, while a save appeared to work because it binds from memory. The
+rule is Core's `WatchlistScope.NeedsRead` now, over a read state that a usable read alone arms, and the
+per-environment line is `SettingsStatus.DescribeForEnvironment`. The operator's own file proved the read
+itself was healthy (loaded, one list, 59 of 59 members), which is why the fix is one state distinction rather
+than a format or storage change: 17 new tests, 539 total, and the environment-scope question it uncovered is
+recorded as AM-41 rather than answered here.
+
+Earlier (2026-11-14): M4 C6 done on top of C5. C5 gave the plugin the storage root
 (`<Paths.SettingsPath>\AutomationMonitor`, the `AUTOMATION_MONITOR_XTB_ROOT` override, a refusal when
 neither is available), the real-`System.IO` `ISettingsFileAccess`, and the `WatchlistStorage` composition
 root. The disk layer is proven against a temporary storage root on two layers - 38 real-filesystem tests in
@@ -29,7 +40,7 @@ the maintainer, and there is still no run grid.
 | Core models, normalization, merge, dedupe, filters, correlation | Implemented and covered | 480 xUnit tests + smoke test, executed on **Windows** (317 before WF-A, 369 after the AM-32/33 cast and projection fixes, 421 after the AM-34 identity fix, 450 after the AM-35 probe rules, 480 after the AM-36 diagnostic hand-back) |
 | M1 solution and cloud-flow discovery | Implemented in core and gateway; **cast and projection defects confirmed live and fixed; the identity defect is fixed and a flow reached the probe on 2026-11-12** | Mapping and identity decisions unit tested; the SDK glue proven against the host's own `Microsoft.Xrm.Sdk` in a net48 harness; the solution read observed live in XrmToolBox; the flow read answered with 59 rows live but every one of them lost its id (AM-34); on 2026-11-12 a flow was selectable and probeable, so a flow row and its identity did reach the UI - the displayed row count and the identity-source tally are still unreported |
 | M3 run history (model, provider, merge, correlation) | Implemented in core and gateway; still no run grid. The only run-history UI is the AM-35 diagnostic probe, whose result AM-36 made readable and copyable in the plugin itself and which answered on 2026-11-12 | Core decisions unit tested (480 tests, smoke `PASS`); the production run read has **never** been executed against a tenant; the AM-35 *diagnostic* read of the same table has (2026-11-12, one flow: the text filter returned 5 rows) - that proves the projected column shapes and the filter choice, not normalization, aggregation or display, and the result window is proven only by the maintainer's run |
-| M4 saved watchlists and settings | Core + **C5 disk storage** + **C6 minimal save/open wired into the discovery screen** (the `WatchlistManager` caller); the fuller Watchlists view is future | Core layer (522 xUnit tests, incl. 38 real-filesystem adapter tests + the C6 wording and interrupted-rotation tests) and the net48 plugin compiles Release clean (0W/0E); deployed 2026-11-14 18:19 through `scripts\deploy.ps1` (Release, host closed) as ProductVersion `0.1.0+fcd2b28` - `Plugins\AutomationMonitor.Plugin.dll` 57856 B sha256 `f9a50382…1121`, `Plugins\AutomationMonitor.Core.dll` 186368 B sha256 `469c79af…32d8`, previous copies backed up to `PluginBackups\AutomationMonitor\20261114-181938`; no live save-reopen run yet |
+| M4 saved watchlists and settings | Core + **C5 disk storage** + **C6 minimal save/open wired into the discovery screen** (the `WatchlistManager` caller); the fuller Watchlists view is future; **AM-40 fixed the reload defect C6's first live run exposed** | Core layer (522 xUnit tests at C6, 539 now, incl. 38 real-filesystem adapter tests + the C6 wording and interrupted-rotation tests) and the net48 plugin compiles Release clean (0W/0E); deployed 2026-11-14 18:19 through `scripts\deploy.ps1` (Release, host closed) as ProductVersion `0.1.0+fcd2b28` - `Plugins\AutomationMonitor.Plugin.dll` 57856 B sha256 `f9a50382…1121`, `Plugins\AutomationMonitor.Core.dll` 186368 B sha256 `469c79af…32d8`, previous copies backed up to `PluginBackups\AutomationMonitor\20261114-181938`; no live save-reopen run yet. **Updated 2026-11-15 (AM-40):** a live save did happen and its file was audited - it loads cleanly - but the drop-down showed nothing, and that reload defect is fixed at L1-L3 (539 xUnit tests incl. 17 restart/read-state tests over a real temporary directory, failing on the old rule at exactly the two AM-40 assertions; net48 Release 0W/0E; smoke `PASS`). The save-close-reopen observation on screen is still owed by the maintainer |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -265,10 +276,15 @@ WF-E starts only after WF-D.4 and after the paused M4 Watchlists view (C6) has a
    discovery diagnostic's reachability.
 3. WF-B.1 spike, then WF-B.2 to B.5.
 4. M4 continues from C6: C5 (the plugin storage root, disk `ISettingsFileAccess` and composition root) and
-   C6 (a minimal save/open wired into the discovery screen through `WatchlistManager`) are done on 2026-11-14.
-   Next: the fuller Watchlists view (tab host, reconciliation preview, management), then the save-reopen-reload
-   runtime gate on a live environment; C7 the full gate with an unchanged package audit and C8 the
-   documentation inventory follow.
+   C6 (a minimal save/open wired into the discovery screen through `WatchlistManager`) are done, and AM-40
+   fixed the reload defect its first live run exposed: saved watchlists are read again after a restart
+   because the read state is now nullable and a usable read alone arms it. Next: the fuller Watchlists view
+   (tab host, reconciliation preview, management), then the save-reopen-reload runtime gate on a live
+   environment; C7 the full gate with an unchanged package audit and C8 the
+   documentation inventory follow. AM-41 is the environment-identity follow-up AM-40 opened: measure whether
+   any host-supplied identity is populated for a connection that reports no `EnvironmentId` before changing
+   scope derivation, because that change moves `WorkflowKey.ScopeId` for every stored member and needs its
+   own evidence and decision.
 5. WF-D: a dual WPF evaluation, which needs a working discovery path to have real rows to show.
 6. WF-E design direction, then WF-C Azure discovery, which is independent of the UI decision but
    obeys the same spike-before-code rule.

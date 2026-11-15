@@ -12,7 +12,7 @@ against a live environment. Every claim below names its evidence. Product behavi
 | `workflow.category` for a modern cloud flow | `5` | Microsoft Learn workflow entity reference + spec | Still documented-only: no workflow row has ever been returned, so the selector value is unconfirmed. `CloudFlowSelectionResult.DescribeDiagnostics()` now logs the category values a real environment does send, which is what will settle it |
 | SDK enum for either value | none | Reflection over `Microsoft.Xrm.Sdk` 9.0.2.2 and `XrmToolBox.Extensibility` 1.2025.10.74 | They are named constants in `DataverseSchema`, not enums |
 | `workflow.statecode` | `0` disabled, `1` enabled | Platform option-set metadata | Normalized to `WorkflowState`; raw code always retained |
-| Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64 | Used as the scope half of `WorkflowKey`; null scope stays a distinct key |
+| Environment id for identity scope | `ConnectionDetail.EnvironmentId` (string) | Reflection over `McTools.Xrm.Connection` 1.2025.9.64; **measured live 2026-11-15** on an Office 365 online connection in XrmToolBox `1.2026.9.78` | Used as the scope half of `WorkflowKey`; null scope stays a distinct key. **Measured: empty on that connection.** The plugin's own `watchlists.json` proved it - the saved watchlist, all 59 of its members and the environment profile stored an empty scope - so flows were keyed unscoped and the Environment column read "unknown environment", correctly. AM-40 was the defect that made this legitimate state invisible rather than merely unscoped |
 | Paging signal | `EntityCollection.MoreRecords` + `PagingCookie` | Reflection over `Microsoft.Xrm.Sdk` | Followed by `PageReader`; a stopped read is `Partial` |
 | Reading an attribute that is **not** an `AliasedValue` as one | `GetAttributeValue<AliasedValue>` **throws** `InvalidCastException`; `entity.Attributes[x] as AliasedValue` returns null instead | net48 harness loading the `Microsoft.Xrm.Sdk.dll` this XrmToolBox install ships (assembly 9.0.0.0, file 9.2.49.14828), 2026-11-09 | **Verified against the assembly the host loads**; still not a tenant observation |
 | Absent attribute, and attribute present with a null value | both read as null; neither throws | Same harness | Verified client-side |
@@ -117,7 +117,16 @@ names column behaviour and coverage - not tenant content.
    security-role advice, not an empty grid.
 5. Record whether `ConnectionDetail.EnvironmentId` is populated for every connection type
    (Office 365, on-premises, ADX); when it is not, flows are keyed unscoped and that must be
-   visible in the UI.
+   visible in the UI. **Answered for one connection type on 2026-11-15:** an Office 365 online
+   connection in XrmToolBox `1.2026.9.78` reported **no** environment id, and the plugin's own file showed
+   it (the saved watchlist, all of its members and the environment profile carried an empty scope).
+   Unscoped keying is therefore the ordinary state on at least this connection type, not an edge case: the
+   saved-watchlist line now says the lists are not environment-scoped, and
+   `WatchlistCatalog.ForEnvironment` shows unscoped lists everywhere so a list built in that state cannot
+   vanish. On-premises and ADX remain unrecorded. **Follow-up (AM-41 in `docs/roadmap.md`):** find a
+   populated identity for this connection type *before* changing scope derivation - substituting one would
+   make freshly discovered keys disagree with the `scopeId` already stored in members, which is a workflow
+   identity decision needing its own evidence and migration answer.
 
 #### Recorded answers — first live session, 2026-11-09 (maintainer-reported)
 

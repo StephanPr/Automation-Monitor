@@ -54,7 +54,15 @@ namespace AutomationMonitor.Plugin
         private WatchlistManager? manager;
         private string? storageFailure;
         private bool watchlistIsSaved;
-        private string loadedEnvironmentKey = string.Empty;
+
+        /// <summary>
+        /// The environment scope the saved catalogue was last READ for, or null when it has not been read in
+        /// this session yet. The null matters: a connection may report no environment id, so the empty string
+        /// is a real scope and cannot also mean "never read". Spelling both as one string is what left a valid
+        /// watchlists.json invisible to the drop-down after a restart (AM-40). WatchlistScope.NeedsRead is the
+        /// only rule that reads this; it is armed solely by a usable read.
+        /// </summary>
+        private string? lastReadScope;
 
         public AutomationMonitorControl()
         {
@@ -410,15 +418,14 @@ namespace AutomationMonitor.Plugin
             return manager;
         }
 
-        /// <summary>The scope saved watchlists are keyed by. Empty means the connection reported no id.</summary>
+        /// <summary>
+        /// The scope saved watchlists are keyed by, normalized by the one Core rule. An empty value means the
+        /// connection reported no environment id: a legitimate unscoped scope, and never a stand-in for
+        /// "the catalogue has not been read yet".
+        /// </summary>
         private string EnvironmentScope
         {
-            get { return (ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId) ?? string.Empty; }
-        }
-
-        private static string NormalizeScope(string? environmentId)
-        {
-            return (environmentId ?? string.Empty).Trim();
+            get { return WatchlistScope.Normalize(ConnectionDetail == null ? null : ConnectionDetail.EnvironmentId); }
         }
 
         /// <summary>
@@ -547,30 +554,23 @@ namespace AutomationMonitor.Plugin
                     }
 
                     WatchlistStoreResult? result = args.Result as WatchlistStoreResult;
-                    loadedEnvironmentKey = NormalizeScope(environmentScope);
+                    if (result == null)
+                    {
+                        lastReadScope = null;
+                        view.SetWatchlistState(DescribeState());
+                        view.Say("Saved watchlists - no result was returned. The file on disk was not changed.");
+                        return;
+                    }
+
+                    // Only a usable read arms the cache. A refusal leaves the catalog empty on purpose and the
+                    // next drop-down must try again, because the operator may have repaired or replaced the
+                    // file by hand in the meantime - remembering a refusal as a good read hides their lists.
+                    lastReadScope = result.IsUsable ? environmentScope : null;
                     BindSavedWatchlists(mgr, environmentScope, keepId ?? mgr.Catalog.ActiveWatchlistId);
                     RefreshWatchlistState();
-                    view.Say(result == null
-                        ? "Saved watchlists - no result was returned."
-                        : ScopeQualified(result, environmentScope));
+                    view.Say(SettingsStatus.DescribeForEnvironment(result, environmentScope));
                 }
             });
-        }
-
-        /// <summary>
-        /// The store's own honest line, with one added qualifier when the connection reported no environment
-        /// id: the saved lists are then not environment-scoped, and provider-capabilities requires that to be
-        /// visible rather than silently shown as if per-environment isolation were working.
-        /// </summary>
-        private static string ScopeQualified(WatchlistStoreResult result, string environmentScope)
-        {
-            string line = result.Describe();
-            if (NormalizeScope(environmentScope).Length == 0)
-            {
-                line += " - the connection reported no environment id, so these saved lists are not environment-scoped.";
-            }
-
-            return line;
         }
 
         private void OnSavedListsDropDown()
@@ -582,8 +582,10 @@ namespace AutomationMonitor.Plugin
                 return;
             }
 
-            // Enumerate the file at most once per environment, and again if the last read was refused.
-            if (!mgr.BlocksSave && string.Equals(loadedEnvironmentKey, NormalizeScope(EnvironmentScope), StringComparison.Ordinal))
+            // Nothing can be listed until the catalog has been read: an empty ComboBox over a file that was
+            // never opened is a lie about the operator's saved lists. The rule - including a refused read and
+            // a connection that now names another environment - lives in Core.
+            if (!WatchlistScope.NeedsRead(lastReadScope, EnvironmentScope, mgr.BlocksSave))
             {
                 return;
             }
@@ -671,7 +673,9 @@ namespace AutomationMonitor.Plugin
 
                     if (!outcome.Success || outcome.Saved == null)
                     {
-                        loadedEnvironmentKey = string.Empty;
+                        // The catalog this save touched is no longer known-good, so nothing may be offered
+                        // from it until it has been read again.
+                        lastReadScope = null;
                         watchlistIsSaved = false;
                         RefreshWatchlistState();
                         view.Say(outcome.Message);
@@ -681,7 +685,10 @@ namespace AutomationMonitor.Plugin
 
                     watchlist = outcome.Saved;
                     watchlistIsSaved = true;
-                    loadedEnvironmentKey = NormalizeScope(environmentScope);
+
+                    // The save read the file first and the drop-down was just bound from the result, so this
+                    // session has genuinely read this scope.
+                    lastReadScope = environmentScope;
                     view.ShowWatchlist(outcome.Saved);
                     BindSavedWatchlists(mgr, environmentScope, outcome.Saved.Id);
                     view.SetSaveEnabled(false);
@@ -758,7 +765,11 @@ namespace AutomationMonitor.Plugin
             string? id = view.SelectedSavedWatchlistId;
             if (id == null)
             {
-                view.Say("Choose a saved watchlist to open.");
+                // An unopened drop-down is not the same state as a file with nothing in it: the read that
+                // fills it has not happened yet, so name the missing action instead of repeating the request.
+                view.Say(lastReadScope == null
+                    ? "Open the Saved list first - that reads the watchlists stored on this machine - then pick one to open."
+                    : "Choose a saved watchlist to open.");
                 return;
             }
 

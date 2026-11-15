@@ -7,7 +7,17 @@ acceptance gates all live here. `docs/specification.md` owns product behaviour,
 verified source facts. The maintainer-local `docs/development-plan.md` keeps the original planning
 narrative and estimates, and defers to this file wherever sequence or a gate is concerned.
 
-Last updated: 2026-11-15 - **AM-44.3b is implemented and deployed (`0.1.0+f895528…`): the association an operator confirms is now reachable, and no
+Last updated: 2026-11-15 - **repository presentation and MVP planning pass. The MVP target is 31 December 2026** (section 6.1). No code changed in this pass.
+It records the maintainer's live run of the AM-44.3b association on the deployed `f895528` build: every stored workflow identifier in the legacy list
+verified in the connected organization, the preview naming the correct target organization, `No` changing nothing and `Yes` applying the association - the
+first confirmed re-key observed inside XrmToolBox, and the point at which the **environment-identity implementation workstream (AM-41 to AM-44.3b) closes**,
+leaving reporting rather than building: section 3 item 11 is **partly reported** (its scaling / Tab-order detail, the remaining refusals, the two-list
+isolation check and the post-association restart-and-reopen observation are still owed, and no claim is made about what an associated list looks like after a
+restart). Next product priorities, in order: the modern-UI feasibility spike (WF-D), solution-independent discovery with individual flow selection (WF-B), and
+the run-history monitoring interface that puts the existing Core engine on screen. `README.md` now states that destination for a first-time reader, and the
+MVP/post-MVP split is section 6.1.
+
+Earlier (2026-11-15): **AM-44.3b is implemented and deployed (`0.1.0+f895528…`): the association an operator confirms is now reachable, and no
 stored identity has moved by itself.** `ScopeResolutionSupport` now ships `Resolvable`, so the confirmed action can
 re-key a saved list from unverified to the connected organization - a **one-time migration of a legacy list**, not a
 monitoring step (AC-40). It remains the only route to a stored qualified
@@ -24,8 +34,8 @@ that pinned the shipped refusal was inverted deliberately, because this pass cha
 smoke `PASS` lines and the `net48` Release build (0 warning / 0 error) are green on Windows 11. The AM-44.1
 previous-build harness was re-run **before** this write, against both the AM-44.3a build (`40f60a5`) and `b318416`, on
 a real `watchlists.json` produced by this build's own association path rather than a hand-written fixture:
-`COMPATIBILITY: PASS` both times, so `schemaVersion` stays 1. The gate for this build is section 3 item 11 and it is
-the maintainer's to run; item 10 for AM-44.3a is **partly reported** - the connected label, the intact 59-member list,
+`COMPATIBILITY: PASS` both times, so `schemaVersion` stays 1. Section 3 item 11 is this build's gate: it was
+the maintainer's to run and has now been reported **in part** (see the entry above); item 10 for AM-44.3a is **partly reported** - the connected label, the intact 59-member list,
 the qualified list re-opened after a restart and the other read-only checks were observed, while the mid-operation
 connection switch and the scaling / Tab-order detail were deferred by decision, not passed. No agent has run this
 association against the operator's own saved list, and none will.
@@ -140,7 +150,7 @@ host:** after that redeploy the saved watchlist is visible in the Saved drop-dow
 stored members with no solution query, so C6's save-reopen-reload acceptance is met on screen. Not reported
 and therefore still open: closing and reopening the plugin tab separately from a host restart, and gate item 4
 (layout at 100/150/200 percent, keyboard navigation) |
-| Environment identity and scope (AM-41 to AM-44) | AM-41 investigated, AM-42 implemented, deployed **and reported by the maintainer**, AM-43 designed, **AM-44.1, AM-44.2, AM-44.2a and AM-44.3 implemented (2026-11-15)** - the scope contract, the read-loss refusal, the verification read, the association preview and, as of AM-44.3b, the confirmed association itself: `ScopeResolutionSupport` ships `Resolvable`, listing / naming / settings-profile lookup share one identity rule instead of three textual comparisons, and the action re-checks that the connected organization is still the one the confirmed preview named before a byte moves. **Nothing re-keys a stored list by itself and none has ever been re-keyed on the operator's own file** | Core xUnit suite (771 tests) plus both smoke `PASS` lines on **Windows 11**, `net48` Release 0W/0E, and the previous-build compatibility harness answered `COMPATIBILITY: PASS` against `b318416` **and** against `40f60a5` on a file this build's own association wrote. The identity read's runtime gate (section 3, item 8) is **closed for this connection**: neither environment-id source stated an identifier, `WhoAmIRequest` succeeded and `WhoAmIResponse.OrganizationId` arrived with a valid GUID shape. The saved-list gate (item 9) is **closed** by the maintainer's re-run on the corrected `3c02a74` build (59 of 59 confirmed, verdict `Verified`, file untouched). Item 10 (AM-44.3a's qualified-scope resolution inside XrmToolBox) is **partly reported** - the connected label, the intact 59-member unverified list, a qualified list re-opened after a host restart and the other read-only checks were observed, while the mid-operation connection switch and the scaling / Tab-order detail were deferred by the maintainer's decision, not passed. Item 11 (this action's preview, refusals and result) is **open**, and no agent session connects to an environment to close it |
+| Environment identity and scope (AM-41 to AM-44) | AM-41 investigated, AM-42 implemented, deployed **and reported by the maintainer**, AM-43 designed, **AM-44.1, AM-44.2, AM-44.2a and AM-44.3 implemented (2026-11-15)** - the scope contract, the read-loss refusal, the verification read, the association preview and, as of AM-44.3b, the confirmed association itself: `ScopeResolutionSupport` ships `Resolvable`, listing / naming / settings-profile lookup share one identity rule instead of three textual comparisons, and the action re-checks that the connected organization is still the one the confirmed preview named before a byte moves. **Nothing re-keys a stored list by itself, and the only re-key that has ever happened on the operator's own file is the one the maintainer confirmed on 2026-11-15** | Core xUnit suite (771 tests) plus both smoke `PASS` lines on **Windows 11**, `net48` Release 0W/0E, and the previous-build compatibility harness answered `COMPATIBILITY: PASS` against `b318416` **and** against `40f60a5` on a file this build's own association wrote. The identity read's runtime gate (section 3, item 8) is **closed for this connection**: neither environment-id source stated an identifier, `WhoAmIRequest` succeeded and `WhoAmIResponse.OrganizationId` arrived with a valid GUID shape. The saved-list gate (item 9) is **closed** by the maintainer's re-run on the corrected `3c02a74` build (59 of 59 confirmed, verdict `Verified`, file untouched). Item 10 (AM-44.3a's qualified-scope resolution inside XrmToolBox) is **partly reported** - the connected label, the intact 59-member unverified list, a qualified list re-opened after a host restart and the other read-only checks were observed, while the mid-operation connection switch and the scaling / Tab-order detail were deferred by the maintainer's decision, not passed. Item 11 (this action's preview, refusals and result) is **partly reported**: on 2026-11-15 the maintainer ran it on the `f895528` build and reported every stored member verified in the connected organization, the preview naming the correct target organization, `No` changing nothing and `Yes` applying the association; not reported are the scaling / Tab-order detail, the remaining refusals, the two-list isolation check and the post-association restart-and-reopen observation, so no claim is made about an associated list after a restart |
 | M5 dashboard, M6 run details, M7 reports | Not started | - |
 | M9-M11 Azure Logic Apps and APIM | Not started; `ProviderKinds.IsImplemented` already reports them unimplemented | - |
 | Packaging, manifest, validator, release gate | Implemented and audited | Python packaging tests plus a real 65-check package audit |
@@ -241,7 +251,7 @@ Windows session records:
    **Redeployed for this gate on 2026-11-15 and NOT yet satisfied.** The build is ProductVersion
    `0.1.0+3c02a74966b57e09f50dd3731acfac9894d9132f` (`3c02a74`, the AM-44.2a fix commit; Release 0W/0E on
    Windows 11 after 705 unit tests and both smoke `PASS` lines), installed by `scripts\deploy.ps1` into
-   `C:\Users\Stephan\Desktop\XrmToolBox` with storage root `%APPDATA%\MscrmTools\XrmToolBox` while no
+   the maintainer's local XrmToolBox application directory with storage root `%APPDATA%\MscrmTools\XrmToolBox` while no
    `XrmToolBox*` process was running. The two deployed files are SHA-256 identical to the Release output
    (`AutomationMonitor.Plugin.dll` 67584 B `A32B6D3A...`, `AutomationMonitor.Core.dll` 234496 B `D6D91B7A...`), both
    reporting that ProductVersion, and `Plugins\` holds exactly those two names. The replaced copies went to
@@ -281,7 +291,7 @@ Windows session records:
    **Deployed for this gate on 2026-11-15 and NOT yet satisfied.** ProductVersion
    `0.1.0+dcdf38a879078783286aeb482be6e73eb21140fd` (`dcdf38a`, the AM-44.3a commit; Release 0 warning / 0 error on
    Windows 11 after 736 unit tests, both smoke `PASS` lines and the `b318416` previous-build compatibility run),
-   installed by `scripts\deploy.ps1` into `C:\Users\Stephan\Desktop\XrmToolBox` with storage root
+   installed by `scripts\deploy.ps1` into the maintainer's local XrmToolBox application directory with storage root
    `%APPDATA%\MscrmTools\XrmToolBox` while no `XrmToolBox*` process was running. The two deployed files are SHA-256
    identical to the Release output (`AutomationMonitor.Plugin.dll` 75776 B `DA903FD7…`,
    `AutomationMonitor.Core.dll` 243200 B `B2D951E8…`), both report that ProductVersion, neither carries a
@@ -327,7 +337,7 @@ Windows session records:
    list and that the other still lists and opens as before. No agent session connects to an environment or drives the
    plugin's UI to obtain any of this, and no organization value, flow name, identifier or provider message belongs in
    the report.
-   **Deployed for this gate on 2026-11-15 and not yet satisfied.** The absence of the fourth button before this deploy
+   **Deployed for this gate on 2026-11-15 and partly reported by the maintainer the same day.** The absence of the fourth button before this deploy
    was a version gap, not a layout defect: `Plugins` held `0.1.0+dcdf38a879…` (the AM-44.3a build), which contains no
    association action at all. `scripts\deploy.ps1` was run with no `XrmToolBox*` process running, staging the Release
    output rebuilt **after** the commit so the identity names the code: ProductVersion
@@ -340,6 +350,17 @@ Windows session records:
    and the rightmost control - this action - is the first to be cut off when the tab is narrower or the scaling higher.
    If it is missing or its label reads truncated, say so: the remedy is one width property on that button and the row's
    own wrap, not a redesign, and it will not be guessed at without the observation.
+   **Reported by the maintainer on 2026-11-15 on this build: steps (d), (e) and the first half of (f).** The association
+   action was used on the legacy unverified list and read **every stored workflow identifier as verified in the connected
+   organization**; the preview named the correct target organization; answering **No** changed nothing; answering **Yes**
+   applied the organization association. That is the first confirmed re-key observed inside XrmToolBox, and it is what
+   closes the environment-identity workstream as a build track. **Still unreported, so this gate stays open rather than
+   closed:** step (b) - the fourth button's label and position at 100 / 150 / 200 percent scaling and in Tab order, with
+   the width caveat above untested; step (c) on this build; the second half of step (f) - re-opening the list from
+   **Saved** and again after restarting XrmToolBox, so nothing may be claimed about how an associated list behaves after
+   a restart; and steps (g) to (j) - the `.bak` beside the settings file, the no-change wording on an already-associated
+   list, the two refusals, and the two-list isolation check. None of that is a reason to undo the association; it is the
+   reason the remaining checks stay on this list, and the reason no statement about a post-association reopen exists.
 
 The same gate is the definition of done for the WF checkpoints marked **Windows gate** below.
 
@@ -548,10 +569,10 @@ Five rules come out of AM-41, AM-42 and AM-43 and bind every checkpoint above.
   dangerous rather than merely unconfirmed; AM-44.3b then lifted `ScopeResolutionSupport` deliberately, on the strength
   of the shared `ResourceScope.NamesSameEnvironment` rule used by listing, naming and profile lookup, a re-check that
   the connected organization is still the one the preview was verified against, and the previous-build round trip run
-  against a file that path really wrote. What is **not** observed is the rest: section 3 item 11 has not been reported
-  at all, and item 10 was reported only in part - its connection-switch step and its scaling / Tab-order detail were
-  deferred by the maintainer's decision, not passed - so this build offers the action without a reported observation of
-  a confirmed re-key inside XrmToolBox. A stored list that names an identity the monitoring path cannot match is a
+  against a file that path really wrote. What is **not** observed is the rest: section 3 item 11 has now been reported
+  in part - its preview, the refusal at `No` and the association applied at `Yes` were observed, while the scaling /
+  Tab-order detail, the other refusals, the two-list isolation check and the post-association reopen were not - so the
+  re-key is now observed inside XrmToolBox while the full gate stays open. A stored list that names an identity the monitoring path cannot match is a
   list the operator has lost, and a re-key they never agreed to is a list they never chose. Storing a qualified scope
   is a change of value inside existing fields and
   keeps `schemaVersion` 1 **only while the previous build's read-and-write round trip is proven** — that proof ran and
@@ -573,6 +594,16 @@ scope at all - applying an association is deferred - so that harness did not nee
 does flip derivation, must re-run it before its first write. AM-43's multi-environment membership still waits
 on AM-43.3 — what a Consumption connector really propagates — and AM-43.5, the second-environment proof, which needs
 two environments to measure; AM-44.3 no longer waits on AM-42, whose identity read was recorded on 2026-11-15.
+
+**AM-44.3b closes this track as an implementation workstream (2026-11-15).** The connected organization is resolved once
+per connection, discovery and a newly saved list are keyed by it, a stored qualified scope is matched by one shared rule
+instead of three textual comparisons, and the confirmed one-time association has now been reported working on the
+maintainer's own legacy list: every member verified in the connected organization, the preview naming the correct
+organization, `No` writing nothing and `Yes` applying it. What remains here is reporting, not building - section 3 items
+10 and 11 are partly reported (the scaling and Tab-order detail, the mid-operation connection switch, the remaining
+refusals, two-list isolation and the post-association restart-and-reopen observation). The build half of AM-43 - one list
+spanning several environments, with its fan-out query and its own reconciliation preview - stays **after the MVP**: it
+needs a second environment to measure and it is not on the December path recorded in section 6.1.
 
 ## 6. Sequence, dependencies and what stays paused
 
@@ -613,8 +644,8 @@ two environments to measure; AM-44.3 no longer waits on AM-42, whose identity re
    one the confirmed preview was verified against before a byte moves. **Nothing automatic re-keys anything**, adding or
    importing a qualified flow into an unverified list is still refused, and both Windows gates stay open - section 3
    item 10 (this resolution observed inside XrmToolBox, whose remaining mid-read connection-switch step and scaling /
-   Tab-order detail were deferred by the maintainer's decision) and item 11 (the confirmation, its preview, its
-   refusals and its result). The order the maintainer approved on
+    Tab-order detail were deferred by the maintainer's decision) and item 11 (whose preview, whose answer of `No` and
+    whose applied `Yes` were reported the same day, the remaining steps not). The order the maintainer approved on
    2026-11-15 therefore continues with AM-43's build - multi-environment membership and
    query fan-out, which needs a second environment to prove - followed by AM-45's independent Azure contexts. The
    single-environment identity work therefore precedes multi-environment connection management: every AM-44
@@ -632,6 +663,30 @@ top of it, each green at its layer, and the open checkpoints and contract change
 unchanged: the settings kind discriminator, Clear moving content to a displaced file instead of
 deleting it, the store notes on WatchlistStoreResult, and a serializer that refuses a payload which
 is not exactly one object.
+
+### 6.1 The road to MVP - target 31 December 2026
+
+**The MVP is a read-only monitoring tool for one Dataverse environment**: browse the cloud flows the supported discovery
+source exposes without needing a solution as the entry point, select individual flows into a locally saved watchlist, and
+see their run history - status, duration, failure detail and the coverage state of the source that answered. `README.md`
+carries the same scope for a reader of the repository; this section owns the sequencing, and the dates below are targets,
+not promises.
+
+| Window | Checkpoints in it | Exit evidence |
+|---|---|---|
+| 16-22 Nov 2026 | This documentation and metadata pass; the reporting half of M4 and WF-F (the gate items still owed); WF-D.1 and WF-D.2, to get the modern-UI feasibility question under way | published docs agree with the code and with the maintainer's reports; a measured answer on hosting WPF inside XrmToolBox, or the stated WinForms fallback |
+| 23 Nov - 6 Dec 2026 | WF-B: the discovery spike, then browsing flows without a solution and selecting individual flows into a watchlist; the view structure the monitoring screen will live in | flows listed with no solution as the entry point and a watchlist built from a chosen subset, observed on the primary host under the section 3 gate |
+| 7-20 Dec 2026 | The run-history monitoring interface (M5's dashboard): the tested `RunQueryService` behind a grid - status, duration, failure detail - with refresh, cancel and per-source coverage on screen | the Core engine drives a real view, and every coverage state survives from the provider result to the row |
+| 21-31 Dec 2026 | Stabilization: the open gate items, regression fixes, the Windows package and installer run, and the documentation pass that follows | a packaged prerelease candidate whose Windows runtime gate has been run and recorded |
+
+**Outside the MVP, sequenced exactly as before:** AM-43's multi-environment membership and fan-out (it needs a second
+environment to measure), WF-C's Logic Apps discovery and any APIM work (each still spike-first), WF-E's design pass
+(behind WF-D.4), period reports and large exports, monitoring rules and notifications, and any background or hosted
+monitoring - the last excluded permanently rather than merely deferred, because the plugin monitors only while XrmToolBox
+is open.
+
+Pausing functional work does not relax a gate: a checkpoint moves to done only on the evidence its own row names, and
+nothing in this plan licenses a claim that a build has not earned.
 
 ## 7. Standing rules that bind every WF checkpoint
 

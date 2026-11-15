@@ -184,7 +184,7 @@ heap); versions by reading the deployed and restored binaries themselves.
 
 | Fact | Evidence |
 |---|---|
-| The host's application directory is `C:\Users\Stephan\Desktop\XrmToolbox` (`XrmToolBox.exe` ProductVersion `1.2026.9.78`). `%APPDATA%\MscrmTools\XrmToolBox\1.2026.9.78` is the **storage** root and holds no host binaries, so host versions cannot be inspected there | Directory reads 2026-11-15 |
+| The host is installed in the maintainer's local application directory, separate from the storage root (`XrmToolBox.exe` ProductVersion `1.2026.9.78`). `%APPDATA%\MscrmTools\XrmToolBox\1.2026.9.78` is the **storage** root and holds no host binaries, so host versions cannot be inspected there | Directory reads 2026-11-15 |
 | `McTools.Xrm.Connection.dll` deployed by the host is ProductVersion and FileVersion `1.2025.9.64` — the version the plugin compiles against | Deployed binary `VersionInfo`, versus the plugin's `PackageReference` |
 | `ConnectionDetail` exposes `EnvironmentId`, `EnvironmentText`, `TenantId`, `ConnectionId`, `Organization`, `OrganizationUrlName`, `OrganizationFriendlyName`, `OrganizationServiceUrl`, `OrganizationDataServiceUrl`, `OrganizationVersion`, `ServerName`, `OriginalUrl`, `WebApplicationUrl` and `ServiceClient` | Accessors `get_EnvironmentId`, `get_TenantId`, `get_ConnectionId`, `get_OrganizationUrlName`, `get_ServiceClient` … present in both the restored and the deployed assembly |
 | `ConnectionDetail` exposes **no organization id**, so the organization the connection talks to is not derivable from the connection object alone | No `get_OrganizationId` accessor in that assembly's metadata |
